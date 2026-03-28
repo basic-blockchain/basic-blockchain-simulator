@@ -1,0 +1,156 @@
+name: Reusable Polyglot CI
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        required: false
+        type: string
+        default: auto
+      working-directory:
+        required: false
+        type: string
+        default: .
+      python-version:
+        required: false
+        type: string
+        default: "3.12"
+      node-version:
+        required: false
+        type: string
+        default: "20"
+      go-version:
+        required: false
+        type: string
+        default: "1.22"
+      java-version:
+        required: false
+        type: string
+        default: "21"
+      run-lint-command:
+        required: false
+        type: string
+        default: ""
+      run-tests-command:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  detect-language:
+    runs-on: ubuntu-latest
+    outputs:
+      selected: ${{ steps.detect.outputs.selected }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect language
+        id: detect
+        shell: bash
+        run: |
+          selected="${{ inputs.language }}"
+          if [[ "$selected" == "auto" ]]; then
+            if [[ -f requirements.txt ]] || [[ -f pytest.ini ]] || ls *.py >/dev/null 2>&1; then
+              selected="python"
+            elif [[ -f package.json ]]; then
+              selected="node"
+            elif [[ -f go.mod ]]; then
+              selected="go"
+            elif [[ -f pom.xml ]] || [[ -f build.gradle ]] || [[ -f build.gradle.kts ]]; then
+              selected="java"
+            else
+              selected="python"
+            fi
+          fi
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          echo "Detected language: $selected"
+
+  ci:
+    runs-on: ubuntu-latest
+    needs: detect-language
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: needs.detect-language.outputs.selected == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install Python dependencies
+        if: needs.detect-language.outputs.selected == 'python'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          else
+            pip install pytest
+          fi
+
+      - name: Setup Node.js
+        if: needs.detect-language.outputs.selected == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install Node dependencies
+        if: needs.detect-language.outputs.selected == 'node'
+        shell: bash
+        run: |
+          if [[ -f package-lock.json ]]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Setup Go
+        if: needs.detect-language.outputs.selected == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Setup Java
+        if: needs.detect-language.outputs.selected == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Run lint command
+        if: inputs.run-lint-command != ''
+        shell: bash
+        run: ${{ inputs.run-lint-command }}
+
+      - name: Run tests command
+        if: inputs.run-tests-command != ''
+        shell: bash
+        run: ${{ inputs.run-tests-command }}
+
+      - name: Default tests for Python
+        if: inputs.run-tests-command == '' && needs.detect-language.outputs.selected == 'python'
+        run: pytest -q
+
+      - name: Default tests for Node
+        if: inputs.run-tests-command == '' && needs.detect-language.outputs.selected == 'node'
+        run: npm test
+
+      - name: Default tests for Go
+        if: inputs.run-tests-command == '' && needs.detect-language.outputs.selected == 'go'
+        run: go test ./...
+
+      - name: Default tests for Java (Maven)
+        if: inputs.run-tests-command == '' && needs.detect-language.outputs.selected == 'java' && hashFiles('pom.xml') != ''
+        run: mvn test
+
+      - name: Default tests for Java (Gradle)
+        if: inputs.run-tests-command == '' && needs.detect-language.outputs.selected == 'java' && hashFiles('build.gradle', 'build.gradle.kts') != ''
+        run: ./gradlew test

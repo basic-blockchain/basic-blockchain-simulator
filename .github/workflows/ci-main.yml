@@ -1,0 +1,33 @@
+name: CI Main Branch
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/reusable-ci-polyglot.yml
+    with:
+      language: python
+      python-version: "3.12"
+      run-tests-command: PYTHONPATH=. pytest -q -m "not integration"
+
+  package:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Archive project snapshot
+        run: |
+          tar -czf blockchain-data-model.tar.gz account-model.py utxo-model.py domain persistence config migrations tests pytest.ini requirements.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blockchain-data-model-snapshot
+          path: blockchain-data-model.tar.gz

@@ -1,0 +1,19 @@
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ".github/workflows/**"
+
+domain:
+  - changed-files:
+      - any-glob-to-any-file: "domain/**"
+
+account-model:
+  - changed-files:
+      - any-glob-to-any-file: "account-model.py"
+
+utxo-model:
+  - changed-files:
+      - any-glob-to-any-file: "utxo-model.py"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "tests/**"

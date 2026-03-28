@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Local safety rail: prevent direct pushes to production branch.
+PROTECTED_BRANCHES=("production")
+
+reject=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  remote_branch="${remote_ref#refs/heads/}"
+  for protected in "${PROTECTED_BRANCHES[@]}"; do
+    if [[ "$remote_branch" == "$protected" ]]; then
+      echo "ERROR: Direct push to '$protected' is blocked locally." >&2
+      echo "Use pull requests and approved merges instead." >&2
+      reject=1
+    fi
+  done
+done
+
+if [[ "$reject" -eq 1 ]]; then
+  exit 1
+fi
+
+exit 0
