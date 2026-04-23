@@ -1,11 +1,11 @@
 # Blockchain Simulator
 
-![Version](https://img.shields.io/badge/version-v0.4.0-blue)
+![Version](https://img.shields.io/badge/version-v0.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-25%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-48%20passed-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-81%25-green)
 
-**Latest stable release:** v0.4.0
+**Latest stable release:** v0.5.0
 
 Backend blockchain simulator built with Python and Flask. Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, and monitor node health — with optional PostgreSQL persistence.
 
@@ -92,6 +92,9 @@ Base path: `/api/v1`
 | `GET` | `/transactions/pending` | List pending transactions |
 | `GET` | `/health` | Node health: DB connectivity + chain height |
 | `GET` | `/metrics` | Chain height, pending tx count, avg mine time |
+| `POST` | `/nodes/register` | Register one or more peer node URLs |
+| `GET` | `/nodes` | List all registered peer nodes |
+| `GET` | `/nodes/resolve` | Run longest-chain consensus against all peers |
 
 ### Quick examples
 
