@@ -36,7 +36,8 @@ class BlockchainService:
     ) -> None:
         self._difficulty_prefix = difficulty_prefix
         self._repo: BlockRepositoryProtocol = repository or InMemoryBlockRepository()
-        self.create_block(proof=1, previous_hash="0")
+        if self._repo.count() == 0:
+            self.create_block(proof=1, previous_hash="0")
 
     @property
     def chain(self) -> list[Block]:
