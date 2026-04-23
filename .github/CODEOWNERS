@@ -1,0 +1,10 @@
+# Global owners
+* @basic-blockchain/admins
+
+# Blockchain simulator core
+/basic-blockchain.py @basic-blockchain/core-devs
+/tests/ @basic-blockchain/qa-devs
+/scripts/ @basic-blockchain/devops-devs
+/README.md @basic-blockchain/core-devs
+/blockchain-simulator-guide.md @basic-blockchain/core-devs
+/.github/workflows/ @basic-blockchain/devops-devs

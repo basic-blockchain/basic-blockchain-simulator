@@ -1,0 +1,42 @@
+name: CI Main Branch
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/reusable-ci-polyglot.yml
+    with:
+      language: python
+      python-version: "3.12"
+      run-lint-command: python -m py_compile basic-blockchain.py
+      run-tests-command: PYTHONPATH=. python -m pytest -q -m "not integration"
+
+  package:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Archive project snapshot
+        run: |
+          tar -czf basic-blockchain-simulator.tar.gz \
+            basic-blockchain.py \
+            blockchain-simulator-guide.md \
+            README.md \
+            requirements.txt \
+            requirements-dev.txt \
+            tests \
+            scripts \
+            .github
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basic-blockchain-simulator-snapshot
+          path: basic-blockchain-simulator.tar.gz

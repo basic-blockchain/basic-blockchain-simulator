@@ -1,0 +1,50 @@
+name: Branch Content Sync Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      reference_branch:
+        description: Reference branch used for content comparison
+        required: false
+        default: main
+        type: string
+      target_branches:
+        description: Space-separated target branches to validate
+        required: false
+        default: "production staging qa develop"
+        type: string
+  schedule:
+    - cron: "15 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  content-sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve check parameters
+        id: params
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "reference=${{ inputs.reference_branch }}" >> "$GITHUB_OUTPUT"
+            echo "targets=${{ inputs.target_branches }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "reference=main" >> "$GITHUB_OUTPUT"
+            echo "targets=production staging qa develop" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate content sync across primary branches
+        shell: bash
+        env:
+          REFERENCE_BRANCH: ${{ steps.params.outputs.reference }}
+          TARGET_BRANCHES: ${{ steps.params.outputs.targets }}
+          REMOTE_NAME: origin
+        run: |
+          bash scripts/devsecops_check_content_sync.sh
