@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from flask import Blueprint, Flask, g, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
