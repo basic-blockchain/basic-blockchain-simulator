@@ -1,151 +1,142 @@
-import datetime 
+from __future__ import annotations
 
-# Calculating the hash
-# in order to add digital
-# fingerprints to the blocks
-import hashlib
+from flask import Blueprint, Flask, jsonify, request
 
-# To store data
-# in our blockchain
-import json
-
-# Flask is for creating the web
-# app and jsonify is for
-# displaying the blockchain
-from flask import Flask, jsonify
+from api.errors import bad_request, register_error_handlers
+from api.logging_config import logger
+from api.rate_limit import rate_limit
+from api.schemas import parse_transaction
+from config import DIFFICULTY_PREFIX
+from domain import BlockchainService, MempoolService
 
 
-class Blockchain:
-
-    # This function is created
-    # to create the very first
-    # block and set its hash to "0"
-    def __init__(self):
-        self.chain = []
-        self.create_block(proof=1, previous_hash='0')
-
-    # This function is created
-    # to add further blocks
-    # into the chain
-    def create_block(self, proof, previous_hash):
-        block = {'index': len(self.chain) + 1,
-                 'timestamp': str(datetime.datetime.now()),
-                 'proof': proof,
-                 'previous_hash': previous_hash}
-        self.chain.append(block)
-        return block
-
-    # This function is created
-    # to display the previous block
-    def print_previous_block(self):
-        return self.chain[-1]
-
-    # This is the function for proof of work
-    # and used to successfully mine the block
-    def proof_of_work(self, previous_proof):
-        new_proof = 1
-        check_proof = False
-
-        while check_proof is False:
-            hash_operation = hashlib.sha256(
-                str(new_proof**2 - previous_proof**2).encode()).hexdigest()
-            if hash_operation[:5] == '00000':
-                check_proof = True
-            else:
-                new_proof += 1
-
-        return new_proof
-
-    def hash(self, block):
-        encoded_block = json.dumps(block, sort_keys=True).encode()
-        return hashlib.sha256(encoded_block).hexdigest()
-
-    def chain_valid(self, chain):
-        previous_block = chain[0]
-        block_index = 1
-
-        while block_index < len(chain):
-            block = chain[block_index]
-            if block['previous_hash'] != self.hash(previous_block):
-                return False
-
-            previous_proof = previous_block['proof']
-            proof = block['proof']
-            hash_operation = hashlib.sha256(
-                str(proof**2 - previous_proof**2).encode()).hexdigest()
-
-            if hash_operation[:5] != '00000':
-                return False
-            previous_block = block
-            block_index += 1
-
-        return True
-
-
-# Creating the Web
-# App using flask
-app = Flask(__name__)
-
-# Create the object
-# of the class blockchain
-blockchain = Blockchain()
-
-# Home route
-@app.route('/', methods=['GET'])
-def home():
-    response = {
-        'message': 'Blockchain simulator is running',
-        'routes': {
-            'mine_block': '/mine_block',
-            'get_chain': '/get_chain',
-            'valid': '/valid'
-        }
+def _legacy_home_payload() -> dict[str, object]:
+    return {
+        "message": "Blockchain simulator is running",
+        "routes": {
+            "mine_block": "/mine_block",
+            "get_chain": "/get_chain",
+            "valid": "/valid",
+        },
     }
-    return jsonify(response), 200
 
 
-# Mining a new block
+def _v1_home_payload() -> dict[str, object]:
+    return {
+        "message": "Blockchain simulator is running",
+        "routes": {
+            "mine_block": "/api/v1/mine_block",
+            "chain": "/api/v1/chain",
+            "valid": "/api/v1/valid",
+            "transactions": "/api/v1/transactions",
+            "pending": "/api/v1/transactions/pending",
+        },
+    }
 
 
-@app.route('/mine_block', methods=['GET'])
-def mine_block():
-    previous_block = blockchain.print_previous_block()
-    previous_proof = previous_block['proof']
+def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, object]:
+    previous_block = blockchain.previous_block()
+    previous_proof = previous_block.proof
     proof = blockchain.proof_of_work(previous_proof)
-    previous_hash = blockchain.hash(previous_block)
+    previous_hash = blockchain.hash_block(previous_block)
     block = blockchain.create_block(proof, previous_hash)
-
-    response = {'message': 'A block is MINED',
-                'index': block['index'],
-                'timestamp': block['timestamp'],
-                'proof': block['proof'],
-                'previous_hash': block['previous_hash']}
-
-    return jsonify(response), 200
-
-# Display blockchain in json format
-
-
-@app.route('/get_chain', methods=['GET'])
-def display_chain():
-    response = {'chain': blockchain.chain,
-                'length': len(blockchain.chain)}
-    return jsonify(response), 200
-
-# Check validity of blockchain
+    included = [tx.to_dict() for tx in mempool.flush()]
+    logger.info(
+        "block_mined",
+        extra={"data": {"index": block.index, "proof": block.proof, "tx_count": len(included)}},
+    )
+    return {
+        "message": "A block is MINED",
+        "index": block.index,
+        "timestamp": block.timestamp,
+        "proof": block.proof,
+        "previous_hash": block.previous_hash,
+        "transactions": included,
+    }
 
 
-@app.route('/valid', methods=['GET'])
-def valid():
-    valid = blockchain.chain_valid(blockchain.chain)
+def create_app(
+    blockchain: BlockchainService | None = None,
+    mempool: MempoolService | None = None,
+) -> Flask:
+    app = Flask(__name__)
+    chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
+    pool = mempool or MempoolService()
 
-    if valid:
-        response = {'message': 'The Blockchain is valid.'}
-    else:
-        response = {'message': 'The Blockchain is not valid.'}
-    return jsonify(response), 200
+    api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
+
+    @app.route("/", methods=["GET"])
+    def home():
+        return jsonify(_legacy_home_payload()), 200
+
+    @api_v1.route("/", methods=["GET"])
+    def v1_home():
+        return jsonify(_v1_home_payload()), 200
+
+    @api_v1.route("/mine_block", methods=["POST"])
+    @rate_limit(max_calls=5, period_seconds=60)
+    def v1_mine_block():
+        return jsonify(_mine(chain_service, pool)), 200
+
+    @api_v1.route("/chain", methods=["GET"])
+    def v1_chain():
+        chain = chain_service.chain_as_dicts()
+        return jsonify({"chain": chain, "length": len(chain)}), 200
+
+    @api_v1.route("/valid", methods=["GET"])
+    def v1_valid():
+        is_valid = chain_service.is_chain_valid()
+        logger.info("chain_validated", extra={"data": {"valid": is_valid}})
+        message = (
+            "The Blockchain is valid." if is_valid else "The Blockchain is not valid."
+        )
+        return jsonify({"message": message, "valid": is_valid}), 200
+
+    @api_v1.route("/transactions", methods=["POST"])
+    def v1_add_transaction():
+        try:
+            tx = parse_transaction(request)
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        try:
+            pool.add(tx)
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        logger.info(
+            "tx_added",
+            extra={"data": {"sender": tx.sender, "receiver": tx.receiver, "amount": tx.amount}},
+        )
+        return jsonify({"message": "Transaction added", "transaction": tx.to_dict()}), 201
+
+    @api_v1.route("/transactions/pending", methods=["GET"])
+    def v1_pending_transactions():
+        pending = [tx.to_dict() for tx in pool.pending()]
+        return jsonify({"transactions": pending, "count": len(pending)}), 200
+
+    @app.route("/mine_block", methods=["GET"])
+    def legacy_mine_block():
+        return jsonify(_mine(chain_service, pool)), 200
+
+    @app.route("/get_chain", methods=["GET"])
+    def legacy_get_chain():
+        chain = chain_service.chain_as_dicts()
+        return jsonify({"chain": chain, "length": len(chain)}), 200
+
+    @app.route("/valid", methods=["GET"])
+    def legacy_valid():
+        is_valid = chain_service.is_chain_valid()
+        message = (
+            "The Blockchain is valid." if is_valid else "The Blockchain is not valid."
+        )
+        return jsonify({"message": message}), 200
+
+    app.register_blueprint(api_v1)
+    register_error_handlers(app)
+    return app
 
 
-# Run the flask server locally
-if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000)
+app = create_app()
+
+
+if __name__ == "__main__":
+    create_app().run(host="127.0.0.1", port=5000)
