@@ -22,7 +22,9 @@ class ConsensusService:
     def _fetch_chain(self, node_url: str) -> list[Block] | None:
         try:
             url = f"{node_url}/api/v1/chain"
-            with urllib.request.urlopen(url, timeout=self._timeout) as resp:
+            if not url.startswith(("http://", "https://")):
+                return None
+            with urllib.request.urlopen(url, timeout=self._timeout) as resp:  # nosec B310 — scheme validated above
                 data = json.loads(resp.read())
             raw_blocks = data.get("chain", [])
             return [
