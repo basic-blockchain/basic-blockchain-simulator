@@ -10,7 +10,7 @@ from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
 from config import DATABASE_URL, DIFFICULTY_PREFIX
-from domain import BlockchainService, MempoolService
+from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
 from infrastructure.postgres_repository import PostgresBlockRepository
 
@@ -37,6 +37,9 @@ def _v1_home_payload() -> dict[str, object]:
             "pending": "/api/v1/transactions/pending",
             "health": "/api/v1/health",
             "metrics": "/api/v1/metrics",
+            "nodes_register": "/api/v1/nodes/register",
+            "nodes": "/api/v1/nodes",
+            "nodes_resolve": "/api/v1/nodes/resolve",
         },
     }
 
@@ -66,6 +69,7 @@ def create_app(
     blockchain: BlockchainService | None = None,
     mempool: MempoolService | None = None,
     dsn: str | None = None,
+    node_registry: InMemoryNodeRegistry | None = None,
 ) -> Flask:
     app = Flask(__name__)
     if dsn:
@@ -77,6 +81,9 @@ def create_app(
     else:
         chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
         pool = mempool or MempoolService()
+
+    registry = node_registry or InMemoryNodeRegistry()
+    consensus = ConsensusService(blockchain=chain_service, registry=registry)
 
     @app.before_request
     def _assign_request_id():
@@ -131,6 +138,34 @@ def create_app(
     def v1_pending_transactions():
         pending = [tx.to_dict() for tx in pool.pending()]
         return jsonify({"transactions": pending, "count": len(pending)}), 200
+
+    @api_v1.route("/nodes/register", methods=["POST"])
+    def v1_nodes_register():
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        nodes = data.get("nodes")
+        if not nodes or not isinstance(nodes, list):
+            return bad_request("Field 'nodes' must be a non-empty list", "VALIDATION_ERROR")
+        added = []
+        for url in nodes:
+            if not isinstance(url, str) or not url.strip():
+                return bad_request(f"Invalid node URL: {url!r}", "VALIDATION_ERROR")
+            registry.add(url.strip())
+            added.append(url.strip())
+        return jsonify({"message": "Nodes registered", "total": registry.count(), "nodes": registry.all()}), 201
+
+    @api_v1.route("/nodes", methods=["GET"])
+    def v1_nodes_list():
+        return jsonify({"nodes": registry.all(), "total": registry.count()}), 200
+
+    @api_v1.route("/nodes/resolve", methods=["GET"])
+    def v1_nodes_resolve():
+        replaced = consensus.resolve()
+        chain = chain_service.chain_as_dicts()
+        message = "Chain replaced with longer valid chain from network" if replaced else "Local chain is authoritative"
+        logger.info("consensus_resolved", extra={"data": {"replaced": replaced, "chain_height": len(chain)}})
+        return jsonify({"message": message, "replaced": replaced, "chain": chain}), 200
 
     @api_v1.route("/metrics", methods=["GET"])
     def v1_metrics():
