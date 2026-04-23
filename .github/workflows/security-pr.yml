@@ -24,7 +24,6 @@ jobs:
 
   sast-python:
     runs-on: ubuntu-latest
-    if: ${{ hashFiles('**/*.py') != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,13 +39,7 @@ jobs:
           pip install bandit pip-audit
 
       - name: Run Bandit
-        run: bandit -r . -ll
+        run: bandit -r domain/ api/ infrastructure/ basic-blockchain.py config.py -ll
 
-      - name: Run pip-audit when requirements exist
-        shell: bash
-        run: |
-          if [[ -f requirements.txt ]]; then
-            pip-audit -r requirements.txt
-          else
-            echo "No requirements.txt found, skipping pip-audit."
-          fi
+      - name: Run pip-audit
+        run: pip-audit -r requirements.txt

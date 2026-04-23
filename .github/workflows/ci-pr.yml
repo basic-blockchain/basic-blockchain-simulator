@@ -13,5 +13,5 @@ jobs:
     with:
       language: python
       python-version: "3.12"
-      run-lint-command: python -m py_compile basic-blockchain.py
-      run-tests-command: PYTHONPATH=. python -m pytest -q -m "not integration"
+      run-lint-command: python -m py_compile basic-blockchain.py domain/blockchain.py domain/models.py domain/validation.py domain/mempool.py api/schemas.py api/errors.py api/rate_limit.py
+      run-tests-command: PYTHONPATH=. python -m pip install pytest-cov --quiet && PYTHONPATH=. python -m pytest -q -m "not integration"
