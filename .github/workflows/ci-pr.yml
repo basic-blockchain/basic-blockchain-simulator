@@ -13,40 +13,5 @@ jobs:
     with:
       language: python
       python-version: "3.12"
-      run-lint-command: python -m py_compile account-model.py utxo-model.py
-      run-tests-command: PYTHONPATH=. pytest -q -m "not integration"
-
-  integration:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: blockchain_test
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-      - name: Run migrations
-        run: PYTHONPATH=. python migrations/migrate.py
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/blockchain_test
-      - name: Run integration tests
-        run: PYTHONPATH=. pytest -q -m integration
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/blockchain_test
-          PERSISTENCE_BACKEND: postgres
+      run-lint-command: python -m py_compile basic-blockchain.py
+      run-tests-command: PYTHONPATH=. python -m pytest -q -m "not integration"

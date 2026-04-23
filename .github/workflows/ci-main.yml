@@ -13,7 +13,8 @@ jobs:
     with:
       language: python
       python-version: "3.12"
-      run-tests-command: PYTHONPATH=. pytest -q -m "not integration"
+      run-lint-command: python -m py_compile basic-blockchain.py
+      run-tests-command: PYTHONPATH=. python -m pytest -q -m "not integration"
 
   package:
     needs: ci
@@ -24,10 +25,18 @@ jobs:
 
       - name: Archive project snapshot
         run: |
-          tar -czf blockchain-data-model.tar.gz account-model.py utxo-model.py domain persistence config migrations tests pytest.ini requirements.txt
+          tar -czf basic-blockchain-simulator.tar.gz \
+            basic-blockchain.py \
+            blockchain-simulator-guide.md \
+            README.md \
+            requirements.txt \
+            requirements-dev.txt \
+            tests \
+            scripts \
+            .github
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: blockchain-data-model-snapshot
-          path: blockchain-data-model.tar.gz
+          name: basic-blockchain-simulator-snapshot
+          path: basic-blockchain-simulator.tar.gz
