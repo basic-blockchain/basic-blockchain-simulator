@@ -6,8 +6,10 @@ from api.errors import bad_request, register_error_handlers
 from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
-from config import DIFFICULTY_PREFIX
+from config import DATABASE_URL, DIFFICULTY_PREFIX
 from domain import BlockchainService, MempoolService
+from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
+from infrastructure.postgres_repository import PostgresBlockRepository
 
 
 def _legacy_home_payload() -> dict[str, object]:
@@ -58,10 +60,18 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
 def create_app(
     blockchain: BlockchainService | None = None,
     mempool: MempoolService | None = None,
+    dsn: str | None = None,
 ) -> Flask:
     app = Flask(__name__)
-    chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
-    pool = mempool or MempoolService()
+    if dsn:
+        chain_service = blockchain or BlockchainService(
+            repository=PostgresBlockRepository(dsn),
+            difficulty_prefix=DIFFICULTY_PREFIX,
+        )
+        pool = mempool or MempoolService(repository=PostgresMempoolRepository(dsn))
+    else:
+        chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
+        pool = mempool or MempoolService()
 
     api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 
@@ -139,4 +149,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    create_app().run(host="127.0.0.1", port=5000)
+    create_app(dsn=DATABASE_URL).run(host="127.0.0.1", port=5000)
