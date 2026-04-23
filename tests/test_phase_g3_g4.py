@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from domain import InMemoryNodeRegistry, PropagationService
 from domain.models import Transaction
+
+
+MODULE_PATH = Path(__file__).resolve().parent.parent / "basic-blockchain.py"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("basic_blockchain", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -160,37 +173,32 @@ def test_get_calls_urlopen_on_valid_url():
 # API — X-Propagated loop-breaker
 # ---------------------------------------------------------------------------
 
-def _make_client():
-    import importlib.util, sys
-    spec = importlib.util.spec_from_file_location("bb", "basic-blockchain.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.create_app().test_client()
-
-
-def test_transaction_propagates_when_no_propagated_header():
-    client = _make_client()
+async def test_transaction_propagates_when_no_propagated_header():
+    module = _load_module()
     with patch("domain.PropagationService.broadcast_transaction") as mock_bc:
-        client.post(
-            "/api/v1/transactions",
-            json={"sender": "alice", "receiver": "bob", "amount": 1.0},
-        )
+        async with module.create_app().test_client() as client:
+            await client.post(
+                "/api/v1/transactions",
+                json={"sender": "alice", "receiver": "bob", "amount": 1.0},
+            )
     mock_bc.assert_called_once()
 
 
-def test_transaction_does_not_propagate_with_x_propagated_header():
-    client = _make_client()
+async def test_transaction_does_not_propagate_with_x_propagated_header():
+    module = _load_module()
     with patch("domain.PropagationService.broadcast_transaction") as mock_bc:
-        client.post(
-            "/api/v1/transactions",
-            json={"sender": "alice", "receiver": "bob", "amount": 1.0},
-            headers={"X-Propagated": "1"},
-        )
+        async with module.create_app().test_client() as client:
+            await client.post(
+                "/api/v1/transactions",
+                json={"sender": "alice", "receiver": "bob", "amount": 1.0},
+                headers={"X-Propagated": "1"},
+            )
     mock_bc.assert_not_called()
 
 
-def test_mine_block_triggers_notify_resolve():
-    client = _make_client()
+async def test_mine_block_triggers_notify_resolve():
+    module = _load_module()
     with patch("domain.PropagationService.notify_resolve") as mock_nr:
-        client.post("/api/v1/mine_block")
+        async with module.create_app().test_client() as client:
+            await client.post("/api/v1/mine_block")
     mock_nr.assert_called_once()

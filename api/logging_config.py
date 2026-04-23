@@ -7,7 +7,7 @@ import time
 
 def _current_request_id() -> str | None:
     try:
-        from flask import g
+        from quart import g
         return getattr(g, "request_id", None)
     except RuntimeError:
         return None
