@@ -2,17 +2,18 @@ ci:
   - changed-files:
       - any-glob-to-any-file: ".github/workflows/**"
 
-domain:
+core:
   - changed-files:
-      - any-glob-to-any-file: "domain/**"
+  - any-glob-to-any-file: "basic-blockchain.py"
 
-account-model:
+docs:
   - changed-files:
-      - any-glob-to-any-file: "account-model.py"
+  - any-glob-to-any-file: "README.md"
+  - any-glob-to-any-file: "blockchain-simulator-guide.md"
 
-utxo-model:
+devops-scripts:
   - changed-files:
-      - any-glob-to-any-file: "utxo-model.py"
+  - any-glob-to-any-file: "scripts/**"
 
 tests:
   - changed-files:

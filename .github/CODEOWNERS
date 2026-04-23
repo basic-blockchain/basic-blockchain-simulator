@@ -1,9 +1,10 @@
 # Global owners
 * @basic-blockchain/admins
 
-# Blockchain core models
-/account-model.py @basic-blockchain/core-devs
-/utxo-model.py @basic-blockchain/core-devs
-/domain/ @basic-blockchain/core-devs
+# Blockchain simulator core
+/basic-blockchain.py @basic-blockchain/core-devs
 /tests/ @basic-blockchain/qa-devs
+/scripts/ @basic-blockchain/devops-devs
+/README.md @basic-blockchain/core-devs
+/blockchain-simulator-guide.md @basic-blockchain/core-devs
 /.github/workflows/ @basic-blockchain/devops-devs

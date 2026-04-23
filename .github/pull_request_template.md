@@ -12,7 +12,7 @@ Describe the scope of the change.
 Explain the technical and business reason.
 
 ## Validation
-- [ ] Local tests passed (`pytest -q`)
+- [ ] Local tests passed (`PYTHONPATH=. py -m pytest -q -m "not integration"`)
 - [ ] Branch updated from target branch
 - [ ] No breaking changes (or documented)
 
