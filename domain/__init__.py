@@ -4,6 +4,8 @@ from .blockchain import BlockchainService, InMemoryBlockRepository
 from .validation import validate_transaction
 from .mempool_repository import MempoolRepositoryProtocol, InMemoryMempoolRepository
 from .mempool import MempoolService
+from .node_registry import NodeRegistryProtocol, InMemoryNodeRegistry
+from .consensus import ConsensusService
 
 __all__ = [
     "Block",
@@ -15,4 +17,7 @@ __all__ = [
     "MempoolRepositoryProtocol",
     "InMemoryMempoolRepository",
     "MempoolService",
+    "NodeRegistryProtocol",
+    "InMemoryNodeRegistry",
+    "ConsensusService",
 ]
