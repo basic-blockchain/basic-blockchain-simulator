@@ -6,6 +6,7 @@ from .mempool_repository import MempoolRepositoryProtocol, InMemoryMempoolReposi
 from .mempool import MempoolService
 from .node_registry import NodeRegistryProtocol, InMemoryNodeRegistry
 from .consensus import ConsensusService
+from .propagation import PropagationService
 
 __all__ = [
     "Block",
@@ -20,4 +21,5 @@ __all__ = [
     "NodeRegistryProtocol",
     "InMemoryNodeRegistry",
     "ConsensusService",
+    "PropagationService",
 ]
