@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, Flask, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
+from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
 from config import DIFFICULTY_PREFIX
@@ -40,6 +41,10 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
     previous_hash = blockchain.hash_block(previous_block)
     block = blockchain.create_block(proof, previous_hash)
     included = [tx.to_dict() for tx in mempool.flush()]
+    logger.info(
+        "block_mined",
+        extra={"data": {"index": block.index, "proof": block.proof, "tx_count": len(included)}},
+    )
     return {
         "message": "A block is MINED",
         "index": block.index,
@@ -81,6 +86,7 @@ def create_app(
     @api_v1.route("/valid", methods=["GET"])
     def v1_valid():
         is_valid = chain_service.is_chain_valid()
+        logger.info("chain_validated", extra={"data": {"valid": is_valid}})
         message = (
             "The Blockchain is valid." if is_valid else "The Blockchain is not valid."
         )
@@ -96,6 +102,10 @@ def create_app(
             pool.add(tx)
         except ValueError as exc:
             return bad_request(str(exc), "VALIDATION_ERROR")
+        logger.info(
+            "tx_added",
+            extra={"data": {"sender": tx.sender, "receiver": tx.receiver, "amount": tx.amount}},
+        )
         return jsonify({"message": "Transaction added", "transaction": tx.to_dict()}), 201
 
     @api_v1.route("/transactions/pending", methods=["GET"])
