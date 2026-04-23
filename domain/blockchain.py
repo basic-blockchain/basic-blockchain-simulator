@@ -94,5 +94,8 @@ class BlockchainService:
 
         return True
 
+    def chain_length(self) -> int:
+        return self._repo.count()
+
     def chain_as_dicts(self) -> list[dict[str, int | str]]:
         return [block.to_dict() for block in self._repo.get_all()]
