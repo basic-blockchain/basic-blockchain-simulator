@@ -45,7 +45,15 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            try {
+              await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`No commits between ${head} and ${base} — branches are in sync, skipping PR creation.`);
+              } else {
+                throw err;
+              }
+            }
 
   promote-production-to-staging:
     if: github.event_name == 'push' && github.ref_name == 'production'
@@ -70,7 +78,15 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            try {
+              await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`No commits between ${head} and ${base} — branches are in sync, skipping PR creation.`);
+              } else {
+                throw err;
+              }
+            }
 
   promote-staging-to-qa:
     if: github.event_name == 'push' && github.ref_name == 'staging'
@@ -95,7 +111,15 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            try {
+              await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`No commits between ${head} and ${base} — branches are in sync, skipping PR creation.`);
+              } else {
+                throw err;
+              }
+            }
 
   promote-qa-to-develop:
     if: github.event_name == 'push' && github.ref_name == 'qa'
@@ -120,7 +144,15 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            try {
+              await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`No commits between ${head} and ${base} — branches are in sync, skipping PR creation.`);
+              } else {
+                throw err;
+              }
+            }
 
   manual-promotion:
     if: github.event_name == 'workflow_dispatch'
@@ -132,8 +164,8 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const head = core.getInput('source');
-            const base = core.getInput('target');
+            const head = '${{ github.event.inputs.source }}';
+            const base = '${{ github.event.inputs.target }}';
             const title = `Promote ${head} into ${base}`;
             const body = `Manual promotion PR from ${head} to ${base}.`;
 
@@ -145,4 +177,12 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            try {
+              await github.rest.pulls.create({ owner, repo, head, base, title, body });
+            } catch (err) {
+              if (err.status === 422) {
+                core.info(`No commits between ${head} and ${base} — branches are in sync, skipping PR creation.`);
+              } else {
+                throw err;
+              }
+            }
