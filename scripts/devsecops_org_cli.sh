@@ -14,7 +14,11 @@ set -euo pipefail
 #   auth-enable-path
 #
 # Environment variables for bootstrap:
-#   REQUIRED_CHECK (default: CI Pull Request / ci)
+#   MAIN_CHECKS (default: ci / detect-language,ci / ci,enforce-merge-policy)
+#   DEVELOP_CHECKS (default: ci / detect-language,ci / ci)
+#   PRODUCTION_CHECKS (default: enforce-merge-policy)
+#   STAGING_CHECKS (default: empty)
+#   QA_CHECKS (default: empty)
 #   MAIN_APPROVALS (default: 2)
 #   DEVELOP_APPROVALS (default: 1)
 #   PRODUCTION_APPROVALS (default: 2)
@@ -98,7 +102,11 @@ cmd_bootstrap() {
   local org="${1:?Missing org}"
   local repos="${2:-}"
 
-  local required_check="${REQUIRED_CHECK:-CI Pull Request / ci}"
+  local main_checks="${MAIN_CHECKS:-ci / detect-language,ci / ci,enforce-merge-policy}"
+  local develop_checks="${DEVELOP_CHECKS:-ci / detect-language,ci / ci}"
+  local production_checks="${PRODUCTION_CHECKS:-enforce-merge-policy}"
+  local staging_checks="${STAGING_CHECKS:-}"
+  local qa_checks="${QA_CHECKS:-}"
   local main_approvals="${MAIN_APPROVALS:-2}"
   local develop_approvals="${DEVELOP_APPROVALS:-1}"
   local production_approvals="${PRODUCTION_APPROVALS:-2}"
@@ -106,7 +114,7 @@ cmd_bootstrap() {
   local qa_approvals="${QA_APPROVALS:-1}"
 
   bash scripts/bootstrap_org_rules.sh \
-    "$org" "$repos" "$required_check" "$main_approvals" "$develop_approvals" "$production_approvals" "$staging_approvals" "$qa_approvals"
+    "$org" "$repos" "$main_checks" "$develop_checks" "$production_checks" "$staging_checks" "$qa_checks" "$main_approvals" "$develop_approvals" "$production_approvals" "$staging_approvals" "$qa_approvals"
 }
 
 audit_repo_branch() {
@@ -171,7 +179,11 @@ cmd_onboard() {
   local repos="${2:-}"
 
   GH_BIN="${GH_BIN}" APPLY_CHANGES="${APPLY_CHANGES:-false}" OUTPUT_DIR="${OUTPUT_DIR:-reports/devsecops}" \
-    REQUIRED_CHECK="${REQUIRED_CHECK:-CI Pull Request / ci}" MAIN_APPROVALS="${MAIN_APPROVALS:-2}" \
+    MAIN_CHECKS="${MAIN_CHECKS:-ci / detect-language,ci / ci,enforce-merge-policy}" \
+    DEVELOP_CHECKS="${DEVELOP_CHECKS:-ci / detect-language,ci / ci}" \
+    PRODUCTION_CHECKS="${PRODUCTION_CHECKS:-enforce-merge-policy}" \
+    STAGING_CHECKS="${STAGING_CHECKS:-}" QA_CHECKS="${QA_CHECKS:-}" \
+    MAIN_APPROVALS="${MAIN_APPROVALS:-2}" \
     DEVELOP_APPROVALS="${DEVELOP_APPROVALS:-1}" PRODUCTION_APPROVALS="${PRODUCTION_APPROVALS:-2}" \
     STAGING_APPROVALS="${STAGING_APPROVALS:-1}" QA_APPROVALS="${QA_APPROVALS:-1}" \
     bash scripts/devsecops_org_onboarding.sh "${org}" "${repos}"

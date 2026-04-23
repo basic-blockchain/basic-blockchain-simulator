@@ -3,19 +3,23 @@ set -euo pipefail
 
 # Usage examples:
 #   bash scripts/bootstrap_org_rules.sh basic-blockchain
-#   bash scripts/bootstrap_org_rules.sh basic-blockchain "repo-a,repo-b" "CI Pull Request / ci" "2" "1" "2" "1" "1"
+#   bash scripts/bootstrap_org_rules.sh basic-blockchain "repo-a,repo-b" "ci / detect-language,ci / ci,enforce-merge-policy" "ci / detect-language,ci / ci" "enforce-merge-policy" "" "" "2" "1" "2" "1" "1"
 #
 # Optional env vars:
 #   DRY_RUN=true  Print gh commands without applying changes.
 
 ORG="${1:?Missing org}"
 REPO_LIST="${2:-}"
-REQUIRED_CHECK="${3:-CI Pull Request / ci}"
-MAIN_APPROVALS="${4:-2}"
-DEVELOP_APPROVALS="${5:-1}"
-PRODUCTION_APPROVALS="${6:-2}"
-STAGING_APPROVALS="${7:-1}"
-QA_APPROVALS="${8:-1}"
+MAIN_CHECKS="${3:-ci / detect-language,ci / ci,enforce-merge-policy}"
+DEVELOP_CHECKS="${4:-ci / detect-language,ci / ci}"
+PRODUCTION_CHECKS="${5:-enforce-merge-policy}"
+STAGING_CHECKS="${6:-}"
+QA_CHECKS="${7:-}"
+MAIN_APPROVALS="${8:-2}"
+DEVELOP_APPROVALS="${9:-1}"
+PRODUCTION_APPROVALS="${10:-2}"
+STAGING_APPROVALS="${11:-1}"
+QA_APPROVALS="${12:-1}"
 
 resolve_gh_bin() {
   if [[ -n "${GH_BIN:-}" ]]; then
@@ -62,7 +66,7 @@ for repo in "${repos[@]}"; do
   [[ -z "$repo" ]] && continue
   echo "Configuring protections for ${ORG}/${repo}..."
   DRY_RUN="${DRY_RUN:-false}" GH_BIN="${GH_BIN}" bash scripts/bootstrap_github_rules.sh \
-    "$ORG" "$repo" "$REQUIRED_CHECK" "$MAIN_APPROVALS" "$DEVELOP_APPROVALS" "$PRODUCTION_APPROVALS" "$STAGING_APPROVALS" "$QA_APPROVALS"
+    "$ORG" "$repo" "$MAIN_CHECKS" "$DEVELOP_CHECKS" "$PRODUCTION_CHECKS" "$STAGING_CHECKS" "$QA_CHECKS" "$MAIN_APPROVALS" "$DEVELOP_APPROVALS" "$PRODUCTION_APPROVALS" "$STAGING_APPROVALS" "$QA_APPROVALS"
 done
 
 echo "Organization bootstrap completed for ${#repos[@]} repositories."
