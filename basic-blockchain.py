@@ -6,13 +6,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from flask import Blueprint, Flask, g, jsonify, request
+from quart import Blueprint, Quart, g, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
+from api.websocket_hub import WebSocketHub
 from config import DATABASE_URL, DIFFICULTY_PREFIX
 from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService, PropagationService
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
@@ -45,6 +46,7 @@ def _v1_home_payload() -> dict[str, object]:
             "nodes_register": "/api/v1/nodes/register",
             "nodes": "/api/v1/nodes",
             "nodes_resolve": "/api/v1/nodes/resolve",
+            "ws": "/api/v1/ws",
         },
     }
 
@@ -76,8 +78,9 @@ def create_app(
     dsn: str | None = None,
     node_registry=None,
     propagation: PropagationService | None = None,
-) -> Flask:
-    app = Flask(__name__)
+    ws_hub: WebSocketHub | None = None,
+) -> Quart:
+    app = Quart(__name__)
     if dsn:
         chain_service = blockchain or BlockchainService(
             repository=PostgresBlockRepository(dsn),
@@ -92,35 +95,37 @@ def create_app(
 
     consensus = ConsensusService(blockchain=chain_service, registry=registry)
     propagator = propagation or PropagationService(registry=registry)
+    hub = ws_hub or WebSocketHub()
 
     @app.before_request
-    def _assign_request_id():
+    async def _assign_request_id():
         g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
     api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 
     @app.route("/", methods=["GET"])
-    def home():
+    async def home():
         return jsonify(_legacy_home_payload()), 200
 
     @api_v1.route("/", methods=["GET"])
-    def v1_home():
+    async def v1_home():
         return jsonify(_v1_home_payload()), 200
 
     @api_v1.route("/mine_block", methods=["POST"])
     @rate_limit(max_calls=5, period_seconds=60)
-    def v1_mine_block():
+    async def v1_mine_block():
         result = _mine(chain_service, pool)
+        hub.broadcast({"event": "block_mined", "block": result})
         propagator.notify_resolve()
         return jsonify(result), 200
 
     @api_v1.route("/chain", methods=["GET"])
-    def v1_chain():
+    async def v1_chain():
         chain = chain_service.chain_as_dicts()
         return jsonify({"chain": chain, "length": len(chain)}), 200
 
     @api_v1.route("/valid", methods=["GET"])
-    def v1_valid():
+    async def v1_valid():
         is_valid = chain_service.is_chain_valid()
         logger.info("chain_validated", extra={"data": {"valid": is_valid}})
         message = (
@@ -129,9 +134,10 @@ def create_app(
         return jsonify({"message": message, "valid": is_valid}), 200
 
     @api_v1.route("/transactions", methods=["POST"])
-    def v1_add_transaction():
+    async def v1_add_transaction():
+        data = await request.get_json(silent=True)
         try:
-            tx = parse_transaction(request)
+            tx = parse_transaction(data)
         except ValueError as exc:
             return bad_request(str(exc), "VALIDATION_ERROR")
         try:
@@ -147,32 +153,30 @@ def create_app(
         return jsonify({"message": "Transaction added", "transaction": tx.to_dict()}), 201
 
     @api_v1.route("/transactions/pending", methods=["GET"])
-    def v1_pending_transactions():
+    async def v1_pending_transactions():
         pending = [tx.to_dict() for tx in pool.pending()]
         return jsonify({"transactions": pending, "count": len(pending)}), 200
 
     @api_v1.route("/nodes/register", methods=["POST"])
-    def v1_nodes_register():
-        data = request.get_json(silent=True)
+    async def v1_nodes_register():
+        data = await request.get_json(silent=True)
         if not data or not isinstance(data, dict):
             return bad_request("JSON body required", "VALIDATION_ERROR")
         nodes = data.get("nodes")
         if not nodes or not isinstance(nodes, list):
             return bad_request("Field 'nodes' must be a non-empty list", "VALIDATION_ERROR")
-        added = []
         for url in nodes:
             if not isinstance(url, str) or not url.strip():
                 return bad_request(f"Invalid node URL: {url!r}", "VALIDATION_ERROR")
             registry.add(url.strip())
-            added.append(url.strip())
         return jsonify({"message": "Nodes registered", "total": registry.count(), "nodes": registry.all()}), 201
 
     @api_v1.route("/nodes", methods=["GET"])
-    def v1_nodes_list():
+    async def v1_nodes_list():
         return jsonify({"nodes": registry.all(), "total": registry.count()}), 200
 
     @api_v1.route("/nodes/resolve", methods=["GET"])
-    def v1_nodes_resolve():
+    async def v1_nodes_resolve():
         replaced = consensus.resolve()
         chain = chain_service.chain_as_dicts()
         message = "Chain replaced with longer valid chain from network" if replaced else "Local chain is authoritative"
@@ -180,7 +184,7 @@ def create_app(
         return jsonify({"message": message, "replaced": replaced, "chain": chain}), 200
 
     @api_v1.route("/metrics", methods=["GET"])
-    def v1_metrics():
+    async def v1_metrics():
         return jsonify({
             "chain_height": chain_service.chain_length(),
             "pending_transactions": pool.count(),
@@ -188,7 +192,7 @@ def create_app(
         }), 200
 
     @api_v1.route("/health", methods=["GET"])
-    def v1_health():
+    async def v1_health():
         chain_height = chain_service.chain_length()
         if dsn:
             db_ok = check_db_connectivity(dsn)
@@ -201,17 +205,21 @@ def create_app(
             http_code = 200
         return jsonify({"status": status, "db": db_status, "chain_height": chain_height}), http_code
 
+    @api_v1.websocket("/ws")
+    async def v1_ws():
+        await hub.serve()
+
     @app.route("/mine_block", methods=["GET"])
-    def legacy_mine_block():
+    async def legacy_mine_block():
         return jsonify(_mine(chain_service, pool)), 200
 
     @app.route("/get_chain", methods=["GET"])
-    def legacy_get_chain():
+    async def legacy_get_chain():
         chain = chain_service.chain_as_dicts()
         return jsonify({"chain": chain, "length": len(chain)}), 200
 
     @app.route("/valid", methods=["GET"])
-    def legacy_valid():
+    async def legacy_valid():
         is_valid = chain_service.is_chain_valid()
         message = (
             "The Blockchain is valid." if is_valid else "The Blockchain is not valid."
