@@ -14,8 +14,9 @@ from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
 from config import DATABASE_URL, DIFFICULTY_PREFIX
-from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService
+from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService, PropagationService
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
+from infrastructure.postgres_node_registry import PostgresNodeRegistry
 from infrastructure.postgres_repository import PostgresBlockRepository
 
 
@@ -73,7 +74,8 @@ def create_app(
     blockchain: BlockchainService | None = None,
     mempool: MempoolService | None = None,
     dsn: str | None = None,
-    node_registry: InMemoryNodeRegistry | None = None,
+    node_registry=None,
+    propagation: PropagationService | None = None,
 ) -> Flask:
     app = Flask(__name__)
     if dsn:
@@ -82,12 +84,14 @@ def create_app(
             difficulty_prefix=DIFFICULTY_PREFIX,
         )
         pool = mempool or MempoolService(repository=PostgresMempoolRepository(dsn))
+        registry = node_registry or PostgresNodeRegistry(dsn)
     else:
         chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
         pool = mempool or MempoolService()
+        registry = node_registry or InMemoryNodeRegistry()
 
-    registry = node_registry or InMemoryNodeRegistry()
     consensus = ConsensusService(blockchain=chain_service, registry=registry)
+    propagator = propagation or PropagationService(registry=registry)
 
     @app.before_request
     def _assign_request_id():
@@ -106,7 +110,9 @@ def create_app(
     @api_v1.route("/mine_block", methods=["POST"])
     @rate_limit(max_calls=5, period_seconds=60)
     def v1_mine_block():
-        return jsonify(_mine(chain_service, pool)), 200
+        result = _mine(chain_service, pool)
+        propagator.notify_resolve()
+        return jsonify(result), 200
 
     @api_v1.route("/chain", methods=["GET"])
     def v1_chain():
@@ -136,6 +142,8 @@ def create_app(
             "tx_added",
             extra={"data": {"sender": tx.sender, "receiver": tx.receiver, "amount": tx.amount}},
         )
+        if not request.headers.get("X-Propagated"):
+            propagator.broadcast_transaction(tx)
         return jsonify({"message": "Transaction added", "transaction": tx.to_dict()}), 201
 
     @api_v1.route("/transactions/pending", methods=["GET"])
