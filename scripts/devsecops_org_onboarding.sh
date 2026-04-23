@@ -9,7 +9,11 @@ set -euo pipefail
 # Environment variables:
 #   APPLY_CHANGES=true|false   Apply bootstrap between pre/post audits (default: false)
 #   OUTPUT_DIR=path            Output folder for reports (default: reports/devsecops)
-#   REQUIRED_CHECK=...         Forwarded to bootstrap script
+#   MAIN_CHECKS=...            Forwarded to bootstrap script
+#   DEVELOP_CHECKS=...
+#   PRODUCTION_CHECKS=...
+#   STAGING_CHECKS=...
+#   QA_CHECKS=...
 #   MAIN_APPROVALS=2
 #   DEVELOP_APPROVALS=1
 #   PRODUCTION_APPROVALS=2
@@ -24,7 +28,11 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 REPORT_FILE="${OUTPUT_DIR}/onboarding-${ORG}-${TIMESTAMP}.csv"
 SUMMARY_FILE="${OUTPUT_DIR}/onboarding-${ORG}-${TIMESTAMP}.summary.txt"
 
-REQUIRED_CHECK="${REQUIRED_CHECK:-CI Pull Request / ci}"
+MAIN_CHECKS="${MAIN_CHECKS:-ci / detect-language,ci / ci,enforce-merge-policy}"
+DEVELOP_CHECKS="${DEVELOP_CHECKS:-ci / detect-language,ci / ci}"
+PRODUCTION_CHECKS="${PRODUCTION_CHECKS:-enforce-merge-policy}"
+STAGING_CHECKS="${STAGING_CHECKS:-}"
+QA_CHECKS="${QA_CHECKS:-}"
 MAIN_APPROVALS="${MAIN_APPROVALS:-2}"
 DEVELOP_APPROVALS="${DEVELOP_APPROVALS:-1}"
 PRODUCTION_APPROVALS="${PRODUCTION_APPROVALS:-2}"
@@ -150,7 +158,7 @@ write_phase pre
 if [[ "${APPLY_CHANGES}" == "true" ]]; then
   echo "Applying bootstrap controls..."
   GH_BIN="${GH_BIN}" bash scripts/bootstrap_org_rules.sh \
-    "${ORG}" "${REPO_LIST}" "${REQUIRED_CHECK}" "${MAIN_APPROVALS}" "${DEVELOP_APPROVALS}" "${PRODUCTION_APPROVALS}" "${STAGING_APPROVALS}" "${QA_APPROVALS}"
+    "${ORG}" "${REPO_LIST}" "${MAIN_CHECKS}" "${DEVELOP_CHECKS}" "${PRODUCTION_CHECKS}" "${STAGING_CHECKS}" "${QA_CHECKS}" "${MAIN_APPROVALS}" "${DEVELOP_APPROVALS}" "${PRODUCTION_APPROVALS}" "${STAGING_APPROVALS}" "${QA_APPROVALS}"
 else
   echo "Skipping bootstrap changes (APPLY_CHANGES=${APPLY_CHANGES})."
 fi
