@@ -5,7 +5,7 @@
 ![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-80%25-green)
 
-**Latest stable release:** v0.5.0 — v0.6.0 in development
+**Latest stable release:** v0.6.0
 
 Backend blockchain simulator built with Python and Flask. Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, synchronise across nodes, and monitor node health — with optional PostgreSQL persistence.
 
