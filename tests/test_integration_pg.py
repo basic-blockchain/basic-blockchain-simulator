@@ -1,6 +1,7 @@
 import pytest
 
-from domain import BlockchainService
+from domain import BlockchainService, MempoolService, Transaction
+from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
 from infrastructure.postgres_repository import PostgresBlockRepository
 
 
@@ -72,3 +73,51 @@ def test_tampered_block_detected_after_reload(clean_db):
     fresh_repo = PostgresBlockRepository(clean_db)
     fresh_svc = BlockchainService(repository=fresh_repo, difficulty_prefix="0")
     assert fresh_svc.is_chain_valid() is False
+
+
+# ── Mempool persistence ────────────────────────────────────────────────────
+
+
+def test_mempool_add_survives_new_service_instance(clean_db):
+    repo = PostgresMempoolRepository(clean_db)
+    svc = MempoolService(repository=repo)
+    svc.add(Transaction(sender="alice", receiver="bob", amount=1.5))
+
+    repo2 = PostgresMempoolRepository(clean_db)
+    svc2 = MempoolService(repository=repo2)
+    assert svc2.count() == 1
+    pending = svc2.pending()
+    assert pending[0].sender == "alice"
+    assert pending[0].receiver == "bob"
+    assert pending[0].amount == 1.5
+
+
+def test_mempool_flush_clears_db(clean_db):
+    repo = PostgresMempoolRepository(clean_db)
+    svc = MempoolService(repository=repo)
+    svc.add(Transaction(sender="alice", receiver="bob", amount=2.0))
+    svc.add(Transaction(sender="carol", receiver="dave", amount=3.0))
+
+    flushed = svc.flush()
+    assert len(flushed) == 2
+
+    assert PostgresMempoolRepository(clean_db).count() == 0
+
+
+def test_mempool_flush_returns_fifo_order(clean_db):
+    repo = PostgresMempoolRepository(clean_db)
+    svc = MempoolService(repository=repo)
+    svc.add(Transaction(sender="a", receiver="b", amount=1.0))
+    svc.add(Transaction(sender="c", receiver="d", amount=2.0))
+    svc.add(Transaction(sender="e", receiver="f", amount=3.0))
+
+    flushed = svc.flush()
+    assert [tx.sender for tx in flushed] == ["a", "c", "e"]
+
+
+def test_mempool_count_reflects_db_state(clean_db):
+    repo = PostgresMempoolRepository(clean_db)
+    svc = MempoolService(repository=repo)
+    assert svc.count() == 0
+    svc.add(Transaction(sender="x", receiver="y", amount=0.5))
+    assert PostgresMempoolRepository(clean_db).count() == 1
