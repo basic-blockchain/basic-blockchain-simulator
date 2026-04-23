@@ -28,6 +28,10 @@ class InMemoryBlockRepository:
     def count(self) -> int:
         return len(self._blocks)
 
+    def replace_all(self, blocks: list[Block]) -> None:
+        self._blocks.clear()
+        self._blocks.extend(blocks)
+
 
 class BlockchainService:
     def __init__(
@@ -71,29 +75,29 @@ class BlockchainService:
         encoded_block = json.dumps(block.to_dict(), sort_keys=True).encode()
         return hashlib.sha256(encoded_block).hexdigest()
 
-    def is_chain_valid(self) -> bool:
-        chain = self._repo.get_all()
-        previous_block = chain[0]
-        block_index = 1
-
-        while block_index < len(chain):
-            block = chain[block_index]
+    def _validate_blocks(self, blocks: list[Block]) -> bool:
+        if not blocks:
+            return False
+        previous_block = blocks[0]
+        for block in blocks[1:]:
             if block.previous_hash != self.hash_block(previous_block):
                 return False
-
-            previous_proof = previous_block.proof
-            proof = block.proof
             hash_operation = hashlib.sha256(
-                str(proof**2 - previous_proof**2).encode()
+                str(block.proof**2 - previous_block.proof**2).encode()
             ).hexdigest()
-
             if not hash_operation.startswith(self._difficulty_prefix):
                 return False
-
             previous_block = block
-            block_index += 1
-
         return True
+
+    def is_chain_valid(self) -> bool:
+        return self._validate_blocks(self._repo.get_all())
+
+    def is_valid_chain(self, blocks: list[Block]) -> bool:
+        return self._validate_blocks(blocks)
+
+    def replace_chain(self, blocks: list[Block]) -> None:
+        self._repo.replace_all(blocks)
 
     def chain_length(self) -> int:
         return self._repo.count()
