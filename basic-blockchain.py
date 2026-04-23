@@ -126,6 +126,14 @@ def create_app(
         pending = [tx.to_dict() for tx in pool.pending()]
         return jsonify({"transactions": pending, "count": len(pending)}), 200
 
+    @api_v1.route("/metrics", methods=["GET"])
+    def v1_metrics():
+        return jsonify({
+            "chain_height": chain_service.chain_length(),
+            "pending_transactions": pool.count(),
+            "avg_mine_time_seconds": chain_service.avg_mine_time_seconds(),
+        }), 200
+
     @api_v1.route("/health", methods=["GET"])
     def v1_health():
         chain_height = chain_service.chain_length()

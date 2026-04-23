@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+from statistics import mean
 
 from .models import Block
 from .repository import BlockRepositoryProtocol
@@ -96,6 +97,20 @@ class BlockchainService:
 
     def chain_length(self) -> int:
         return self._repo.count()
+
+    def avg_mine_time_seconds(self) -> float | None:
+        blocks = self._repo.get_all()
+        if len(blocks) < 2:
+            return None
+        deltas = []
+        for i in range(1, len(blocks)):
+            try:
+                t0 = datetime.datetime.fromisoformat(str(blocks[i - 1].timestamp))
+                t1 = datetime.datetime.fromisoformat(str(blocks[i].timestamp))
+                deltas.append((t1 - t0).total_seconds())
+            except ValueError:
+                continue
+        return round(mean(deltas), 3) if deltas else None
 
     def chain_as_dicts(self) -> list[dict[str, int | str]]:
         return [block.to_dict() for block in self._repo.get_all()]

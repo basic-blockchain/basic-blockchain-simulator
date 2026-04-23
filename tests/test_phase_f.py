@@ -72,3 +72,39 @@ def test_health_503_when_db_unreachable():
         body = resp.get_json()
         assert body["status"] == "degraded"
         assert body["db"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/metrics
+# ---------------------------------------------------------------------------
+
+def test_metrics_genesis_only():
+    module = _load_module()
+    client = module.create_app().test_client()
+    resp = client.get("/api/v1/metrics")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["chain_height"] == 1
+    assert body["pending_transactions"] == 0
+    assert body["avg_mine_time_seconds"] is None  # need ≥2 blocks
+
+
+def test_metrics_reflects_mined_blocks_and_pending_tx():
+    module = _load_module()
+    from domain import BlockchainService, MempoolService, Transaction
+    svc = BlockchainService(difficulty_prefix="0")
+    pool = MempoolService()
+    pool.add(Transaction(sender="alice", receiver="bob", amount=5.0))
+
+    prev = svc.previous_block()
+    proof = svc.proof_of_work(prev.proof)
+    svc.create_block(proof=proof, previous_hash=svc.hash_block(prev))
+
+    client = module.create_app(blockchain=svc, mempool=pool).test_client()
+    resp = client.get("/api/v1/metrics")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["chain_height"] == 2
+    assert body["pending_transactions"] == 1
+    assert body["avg_mine_time_seconds"] is not None
+    assert body["avg_mine_time_seconds"] >= 0
