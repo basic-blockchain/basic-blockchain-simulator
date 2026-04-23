@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, Flask, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
+from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
 from config import DIFFICULTY_PREFIX
 from domain import BlockchainService, MempoolService
@@ -68,6 +69,7 @@ def create_app(
         return jsonify(_v1_home_payload()), 200
 
     @api_v1.route("/mine_block", methods=["POST"])
+    @rate_limit(max_calls=5, period_seconds=60)
     def v1_mine_block():
         return jsonify(_mine(chain_service, pool)), 200
 
