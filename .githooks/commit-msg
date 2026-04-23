@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="$1"
+subject="$(head -n1 "$msg_file")"
+
+if [[ -z "$subject" ]]; then
+  echo "Commit message error: title cannot be empty." >&2
+  exit 1
+fi
+
+if [[ ${#subject} -lt 20 ]]; then
+  echo "Commit message error: title must have at least 20 characters." >&2
+  exit 1
+fi
+
+if grep -q '^Title:' "$msg_file"; then
+  echo "Commit message error: do not use 'Title:' prefix. Use plain title only." >&2
+  exit 1
+fi
+
+if ! grep -q '^What:' "$msg_file"; then
+  echo "Commit message error: missing 'What:' section." >&2
+  exit 1
+fi
+
+if ! grep -q '^Why:' "$msg_file"; then
+  echo "Commit message error: missing 'Why:' section." >&2
+  exit 1
+fi
+
+what_body="$(awk 'BEGIN{f=0} /^What:/{f=1;next} /^Why:/{f=0} f{print}' "$msg_file" | tr -d '[:space:]')"
+why_body="$(awk 'BEGIN{f=0} /^Why:/{f=1;next} f{print}' "$msg_file" | tr -d '[:space:]')"
+
+if [[ -z "$what_body" ]]; then
+  echo "Commit message error: 'What:' section cannot be empty." >&2
+  exit 1
+fi
+
+if [[ -z "$why_body" ]]; then
+  echo "Commit message error: 'Why:' section cannot be empty." >&2
+  exit 1
+fi
