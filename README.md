@@ -1,13 +1,13 @@
 # Blockchain Simulator
 
-![Version](https://img.shields.io/badge/version-v0.5.0-blue)
+![Version](https://img.shields.io/badge/version-v0.6.0-blue)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-48%20passed-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-81%25-green)
+![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-80%25-green)
 
-**Latest stable release:** v0.5.0
+**Latest stable release:** v0.6.0
 
-Backend blockchain simulator built with Python and Flask. Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, and monitor node health — with optional PostgreSQL persistence.
+Backend blockchain simulator built with Python and Flask. Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, synchronise across nodes, and monitor node health — with optional PostgreSQL persistence.
 
 ---
 
@@ -23,22 +23,26 @@ basic-blockchain.py       ← Flask app factory (create_app)
 │   └── schemas.py        ← Request parsing and validation
 ├── domain/
 │   ├── blockchain.py     ← BlockchainService (PoW, chain validation)
+│   ├── consensus.py      ← ConsensusService (longest-chain resolve)
 │   ├── mempool.py        ← MempoolService (pending transactions)
 │   ├── mempool_repository.py ← MempoolRepositoryProtocol + InMemory impl
 │   ├── models.py         ← Block, Transaction dataclasses
+│   ├── node_registry.py  ← NodeRegistryProtocol + InMemoryNodeRegistry
+│   ├── propagation.py    ← PropagationService (tx broadcast + block push)
 │   ├── repository.py     ← BlockRepositoryProtocol
 │   └── validation.py     ← Transaction validation rules
 ├── infrastructure/
 │   ├── postgres_repository.py         ← PostgreSQL block storage
-│   └── postgres_mempool_repository.py ← PostgreSQL mempool storage
+│   ├── postgres_mempool_repository.py ← PostgreSQL mempool storage
+│   └── postgres_node_registry.py      ← PostgreSQL peer node storage
 ├── migrations/
-│   └── versions/         ← V001–V004 idempotent SQL migrations
+│   └── versions/         ← V001–V005 idempotent SQL migrations
 └── config.py             ← DATABASE_URL, DIFFICULTY_PREFIX from env
 ```
 
 **Persistence modes:**
-- **In-memory** (default) — zero config, used by unit tests
-- **PostgreSQL** — pass `dsn=DATABASE_URL` to `create_app()`; blocks and mempool survive restarts
+- **In-memory** (default) — zero config, used by unit tests; `python basic-blockchain.py` starts here automatically when no `.env` is present
+- **PostgreSQL** — place credentials in `.env`; blocks, mempool, and peer registry survive restarts
 
 ---
 
