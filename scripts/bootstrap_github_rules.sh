@@ -3,19 +3,23 @@ set -euo pipefail
 
 # Usage:
 #   bash scripts/bootstrap_github_rules.sh basic-blockchain blockchain-data-model
-#   bash scripts/bootstrap_github_rules.sh basic-blockchain blockchain-data-model "CI Pull Request / ci" "2" "1" "2" "1" "1"
+#   bash scripts/bootstrap_github_rules.sh basic-blockchain blockchain-data-model "ci / detect-language,ci / ci,enforce-merge-policy" "ci / detect-language,ci / ci" "enforce-merge-policy" "" "" "2" "1" "2" "1" "1"
 #
 # Optional env vars:
 #   DRY_RUN=true  Print gh commands without applying changes.
 
 ORG="${1:?Missing org}"
 REPO="${2:?Missing repo}"
-REQUIRED_CHECK="${3:-CI Pull Request / ci}"
-MAIN_APPROVALS="${4:-2}"
-DEVELOP_APPROVALS="${5:-1}"
-PRODUCTION_APPROVALS="${6:-2}"
-STAGING_APPROVALS="${7:-1}"
-QA_APPROVALS="${8:-1}"
+MAIN_CHECKS="${3:-ci / detect-language,ci / ci,enforce-merge-policy}"
+DEVELOP_CHECKS="${4:-ci / detect-language,ci / ci}"
+PRODUCTION_CHECKS="${5:-enforce-merge-policy}"
+STAGING_CHECKS="${6:-}"
+QA_CHECKS="${7:-}"
+MAIN_APPROVALS="${8:-2}"
+DEVELOP_APPROVALS="${9:-1}"
+PRODUCTION_APPROVALS="${10:-2}"
+STAGING_APPROVALS="${11:-1}"
+QA_APPROVALS="${12:-1}"
 DRY_RUN="${DRY_RUN:-false}"
 
 resolve_gh_bin() {
@@ -73,29 +77,54 @@ ensure_branch() {
 apply_protection() {
   local branch="$1"
   local approvals="$2"
-  shift 2
-  local extra_checks=("$@")
+  local checks_csv="${3:-}"
+
+  local checks_json="null"
+  if [[ -n "${checks_csv}" ]]; then
+    local contexts=""
+    IFS=',' read -r -a checks <<< "${checks_csv}"
+    for check in "${checks[@]}"; do
+      local trimmed
+      trimmed="$(echo "${check}" | xargs)"
+      [[ -z "${trimmed}" ]] && continue
+      if [[ -n "${contexts}" ]]; then
+        contexts+=" , "
+      fi
+      contexts+="\"${trimmed}\""
+    done
+    checks_json="{\"strict\":true,\"contexts\":[${contexts}]}"
+  fi
 
   echo "Applying branch protection to ${branch}..."
-  local cmd=(
-    "${GH_BIN}" api -X PUT "repos/${ORG}/${REPO}/branches/${branch}/protection"
-    -H "Accept: application/vnd.github+json"
-    -f required_status_checks.strict=true
-    -f "required_status_checks.contexts[]=${REQUIRED_CHECK}"
-    -f "required_status_checks.contexts[]=Security PR Checks / secret-scan"
-    -f enforce_admins=true
-    -f required_pull_request_reviews.dismiss_stale_reviews=true
-    -f required_pull_request_reviews.require_code_owner_reviews=true
-    -f "required_pull_request_reviews.required_approving_review_count=${approvals}"
-    -f restrictions=
-  )
+  local payload
+  payload=$(cat <<EOF
+{
+  "required_status_checks": ${checks_json},
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": true,
+    "required_approving_review_count": ${approvals}
+  },
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": true,
+  "lock_branch": false,
+  "allow_fork_syncing": false
+}
+EOF
+)
 
-  for check in "${extra_checks[@]}"; do
-    [[ -z "${check}" ]] && continue
-    cmd+=( -f "required_status_checks.contexts[]=${check}" )
-  done
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[DRY_RUN] ${GH_BIN} api -X PUT repos/${ORG}/${REPO}/branches/${branch}/protection ..."
+    return 0
+  fi
 
-  run_cmd "${cmd[@]}" >/dev/null
+  printf '%s\n' "${payload}" | "${GH_BIN}" api -X PUT "repos/${ORG}/${REPO}/branches/${branch}/protection" \
+    -H "Accept: application/vnd.github+json" --input - >/dev/null
 }
 
 # Ensure all branch stages exist remotely.
@@ -105,10 +134,10 @@ ensure_branch staging
 ensure_branch qa
 
 # Enable branch protection on promotion chain branches.
-apply_protection main "${MAIN_APPROVALS}" "Merge Policy Guard / enforce-merge-policy"
-apply_protection develop "${DEVELOP_APPROVALS}"
-apply_protection production "${PRODUCTION_APPROVALS}" "Merge Policy Guard / enforce-merge-policy"
-apply_protection staging "${STAGING_APPROVALS}"
-apply_protection qa "${QA_APPROVALS}"
+apply_protection main "${MAIN_APPROVALS}" "${MAIN_CHECKS}"
+apply_protection develop "${DEVELOP_APPROVALS}" "${DEVELOP_CHECKS}"
+apply_protection production "${PRODUCTION_APPROVALS}" "${PRODUCTION_CHECKS}"
+apply_protection staging "${STAGING_APPROVALS}" "${STAGING_CHECKS}"
+apply_protection qa "${QA_APPROVALS}" "${QA_CHECKS}"
 
 echo "Done. Branch protections are configured for production/main/staging/qa/develop."
