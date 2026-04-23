@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from flask import Blueprint, Flask, jsonify, request
 
+from api.errors import bad_request, register_error_handlers
+from api.schemas import parse_transaction
 from config import DIFFICULTY_PREFIX
-from domain import BlockchainService, MempoolService, Transaction
+from domain import BlockchainService, MempoolService
 
 
 def _legacy_home_payload() -> dict[str, object]:
@@ -84,19 +86,14 @@ def create_app(
 
     @api_v1.route("/transactions", methods=["POST"])
     def v1_add_transaction():
-        payload = request.get_json(silent=True) or {}
         try:
-            tx = Transaction(
-                sender=str(payload.get("sender", "")),
-                receiver=str(payload.get("receiver", "")),
-                amount=float(payload.get("amount", 0)),
-            )
-        except (TypeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 400
+            tx = parse_transaction(request)
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
         try:
             pool.add(tx)
         except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+            return bad_request(str(exc), "VALIDATION_ERROR")
         return jsonify({"message": "Transaction added", "transaction": tx.to_dict()}), 201
 
     @api_v1.route("/transactions/pending", methods=["GET"])
@@ -122,6 +119,7 @@ def create_app(
         return jsonify({"message": message}), 200
 
     app.register_blueprint(api_v1)
+    register_error_handlers(app)
     return app
 
 
