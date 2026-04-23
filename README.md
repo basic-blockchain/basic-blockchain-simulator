@@ -1,8 +1,8 @@
 # Simulador Básico de Blockchain
 
-![Version](https://img.shields.io/badge/version-v0.3.0-blue)
+![Version](https://img.shields.io/badge/version-v0.4.0-blue)
 
-**Latest stable release:** v0.3.0
+**Latest stable release:** v0.4.0
 
 Este proyecto implementa un simulador educativo de blockchain en Python usando Flask. Permite minar bloques, consultar la cadena y validar su integridad a través de una API REST local.
 
