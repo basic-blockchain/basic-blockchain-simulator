@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from flask import Blueprint, Flask, jsonify, request
+import uuid
+
+from flask import Blueprint, Flask, g, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
+from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
@@ -32,6 +35,8 @@ def _v1_home_payload() -> dict[str, object]:
             "valid": "/api/v1/valid",
             "transactions": "/api/v1/transactions",
             "pending": "/api/v1/transactions/pending",
+            "health": "/api/v1/health",
+            "metrics": "/api/v1/metrics",
         },
     }
 
@@ -72,6 +77,10 @@ def create_app(
     else:
         chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
         pool = mempool or MempoolService()
+
+    @app.before_request
+    def _assign_request_id():
+        g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
     api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 
@@ -122,6 +131,28 @@ def create_app(
     def v1_pending_transactions():
         pending = [tx.to_dict() for tx in pool.pending()]
         return jsonify({"transactions": pending, "count": len(pending)}), 200
+
+    @api_v1.route("/metrics", methods=["GET"])
+    def v1_metrics():
+        return jsonify({
+            "chain_height": chain_service.chain_length(),
+            "pending_transactions": pool.count(),
+            "avg_mine_time_seconds": chain_service.avg_mine_time_seconds(),
+        }), 200
+
+    @api_v1.route("/health", methods=["GET"])
+    def v1_health():
+        chain_height = chain_service.chain_length()
+        if dsn:
+            db_ok = check_db_connectivity(dsn)
+            db_status = "ok" if db_ok else "error"
+            status = "ok" if db_ok else "degraded"
+            http_code = 200 if db_ok else 503
+        else:
+            db_status = "n/a"
+            status = "ok"
+            http_code = 200
+        return jsonify({"status": status, "db": db_status, "chain_height": chain_height}), http_code
 
     @app.route("/mine_block", methods=["GET"])
     def legacy_mine_block():
