@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from .models import Transaction
 from .node_registry import NodeRegistryProtocol
+
+_PROPAGATION_WORKERS = 8
 
 
 class PropagationService:
@@ -39,9 +42,18 @@ class PropagationService:
             pass
 
     def broadcast_transaction(self, tx: Transaction) -> None:
-        for node in self._registry.all():
-            self._post(f"{node}/api/v1/transactions", tx.to_dict())
+        nodes = self._registry.all()
+        if not nodes:
+            return
+        payload = tx.to_dict()
+        with ThreadPoolExecutor(max_workers=min(_PROPAGATION_WORKERS, len(nodes))) as pool:
+            futures = [pool.submit(self._post, f"{node}/api/v1/transactions", payload) for node in nodes]
+            wait(futures)
 
     def notify_resolve(self) -> None:
-        for node in self._registry.all():
-            self._get(f"{node}/api/v1/nodes/resolve")
+        nodes = self._registry.all()
+        if not nodes:
+            return
+        with ThreadPoolExecutor(max_workers=min(_PROPAGATION_WORKERS, len(nodes))) as pool:
+            futures = [pool.submit(self._get, f"{node}/api/v1/nodes/resolve") for node in nodes]
+            wait(futures)
