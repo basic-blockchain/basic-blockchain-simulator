@@ -5,6 +5,14 @@ import logging
 import time
 
 
+def _current_request_id() -> str | None:
+    try:
+        from flask import g
+        return getattr(g, "request_id", None)
+    except RuntimeError:
+        return None
+
+
 class _JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -12,6 +20,9 @@ class _JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "event": record.getMessage(),
         }
+        rid = _current_request_id()
+        if rid:
+            payload["request_id"] = rid
         if hasattr(record, "data"):
             payload["data"] = record.data
         if record.exc_info:

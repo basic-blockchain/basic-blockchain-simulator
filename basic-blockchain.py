@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from flask import Blueprint, Flask, jsonify, request
+import uuid
+
+from flask import Blueprint, Flask, g, jsonify, request
 
 from api.errors import bad_request, register_error_handlers
 from api.health import check_db_connectivity
@@ -75,6 +77,10 @@ def create_app(
     else:
         chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
         pool = mempool or MempoolService()
+
+    @app.before_request
+    def _assign_request_id():
+        g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
     api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 

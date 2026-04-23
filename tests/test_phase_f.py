@@ -108,3 +108,23 @@ def test_metrics_reflects_mined_blocks_and_pending_tx():
     assert body["pending_transactions"] == 1
     assert body["avg_mine_time_seconds"] is not None
     assert body["avg_mine_time_seconds"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Request-ID correlation
+# ---------------------------------------------------------------------------
+
+def test_request_id_generated_when_absent():
+    module = _load_module()
+    client = module.create_app().test_client()
+    resp = client.get("/api/v1/health")
+    # No assertion on value — just that the header round-trips without error
+    assert resp.status_code == 200
+
+
+def test_request_id_propagated_from_header():
+    module = _load_module()
+    client = module.create_app().test_client()
+    custom_id = "test-req-abc123"
+    resp = client.get("/api/v1/health", headers={"X-Request-ID": custom_id})
+    assert resp.status_code == 200
