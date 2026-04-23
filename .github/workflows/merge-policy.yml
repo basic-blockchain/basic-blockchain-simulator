@@ -1,0 +1,33 @@
+name: Merge Policy Guard
+
+on:
+  pull_request:
+    branches: ["main", "production"]
+
+permissions:
+  contents: read
+
+jobs:
+  enforce-merge-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate source branch policy
+        shell: bash
+        run: |
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+          echo "Base: $base | Head: $head"
+
+          if [[ "$base" == "production" ]]; then
+            if [[ ! "$head" =~ ^release/ ]] && [[ ! "$head" =~ ^hotfix/ ]]; then
+              echo "PR to production must come from release/* or hotfix/* branches." >&2
+              exit 1
+            fi
+          fi
+
+          if [[ "$base" == "main" ]]; then
+            if [[ ! "$head" =~ ^release/ ]] && [[ ! "$head" =~ ^hotfix/ ]] && [[ "$head" != "develop" ]] && [[ "$head" != "production" ]]; then
+              echo "PR to main must come from production, develop, release/*, or hotfix/* branches." >&2
+              exit 1
+            fi
+          fi
