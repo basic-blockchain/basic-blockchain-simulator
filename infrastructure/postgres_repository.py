@@ -45,3 +45,12 @@ class PostgresBlockRepository:
             cur.execute("SELECT COUNT(*) FROM blocks")
             row = cur.fetchone()
         return int(row[0]) if row is not None else 0
+
+    def replace_all(self, blocks: list[Block]) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM blocks")
+            for b in blocks:
+                cur.execute(
+                    "INSERT INTO blocks (index, timestamp, proof, previous_hash) VALUES (%s, %s, %s, %s)",
+                    (b.index, b.timestamp, b.proof, b.previous_hash),
+                )
