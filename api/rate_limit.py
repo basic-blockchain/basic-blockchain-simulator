@@ -5,7 +5,7 @@ from collections import deque
 from functools import wraps
 from typing import Callable
 
-from flask import jsonify
+from quart import jsonify
 
 
 def rate_limit(max_calls: int, period_seconds: float) -> Callable:
@@ -18,7 +18,7 @@ def rate_limit(max_calls: int, period_seconds: float) -> Callable:
 
     def decorator(fn: Callable) -> Callable:
         @wraps(fn)
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             now = time.monotonic()
             cutoff = now - period_seconds
 
@@ -38,7 +38,7 @@ def rate_limit(max_calls: int, period_seconds: float) -> Callable:
                 return response, 429
 
             timestamps.append(now)
-            return fn(*args, **kwargs)
+            return await fn(*args, **kwargs)
 
         return wrapper
 
