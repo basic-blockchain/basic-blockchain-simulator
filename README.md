@@ -7,20 +7,34 @@
 
 **Latest stable release:** v0.7.0
 
-Backend blockchain simulator built with Python and Flask. Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, synchronise across nodes, and monitor node health — with optional PostgreSQL persistence.
+Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | Component diagrams, layered design, deployment model, design decisions |
+| [Business Rules](docs/business-rules.md) | All enforced rules (transactions, blocks, consensus, persistence, API) |
+| [Data Model](docs/data-model.md) | ER diagram, class diagram, DDL schema |
+| [Flow Diagrams](docs/flows.md) | Mermaid diagrams for every major operation |
+| [Use Cases](docs/use-cases.md) | UC catalog with actors, flows, pre/postconditions |
+| [API Reference](docs/api-reference.md) | Complete endpoint specification with examples |
 
 ---
 
 ## Architecture
 
 ```
-basic-blockchain.py       ← Flask app factory (create_app)
+basic-blockchain.py       ← Quart app factory (create_app)
 ├── api/
 │   ├── errors.py         ← Uniform JSON error envelopes
 │   ├── health.py         ← DB connectivity check helper
 │   ├── logging_config.py ← Structured JSON logging + request-id
 │   ├── rate_limit.py     ← Sliding-window rate limiter
-│   └── schemas.py        ← Request parsing and validation
+│   ├── schemas.py        ← Request parsing and validation
+│   └── websocket_hub.py  ← WebSocketHub (asyncio queues, broadcast)
 ├── domain/
 │   ├── blockchain.py     ← BlockchainService (PoW, chain validation)
 │   ├── consensus.py      ← ConsensusService (longest-chain resolve)
@@ -99,6 +113,7 @@ Base path: `/api/v1`
 | `POST` | `/nodes/register` | Register one or more peer node URLs |
 | `GET` | `/nodes` | List all registered peer nodes |
 | `GET` | `/nodes/resolve` | Run longest-chain consensus against all peers |
+| `WebSocket` | `/ws` | Real-time `block_mined` event stream |
 
 ### Quick examples
 
@@ -146,3 +161,5 @@ Coverage gate: **80%** (enforced in CI).
 - **Proof of Work** — SHA-256 hash of `(proof² - prev_proof²)` must start with `DIFFICULTY_PREFIX` (default `00000`).
 - **Repository pattern** — `BlockRepositoryProtocol` and `MempoolRepositoryProtocol` decouple domain logic from storage; swap in-memory ↔ PostgreSQL without touching service code.
 - **Structured logging** — Every event emits JSON `{ts, level, event, request_id, data}`; `request_id` is taken from the `X-Request-ID` header or auto-generated per request.
+- **WebSocket push** — Connected clients receive `{"event": "block_mined", "block": {...}}` the moment a block is mined, without polling. Connect to `ws://localhost:5000/api/v1/ws`.
+- **Async ASGI** — All route handlers are `async def` (Quart). For production, run with `hypercorn basic-blockchain:app`.
