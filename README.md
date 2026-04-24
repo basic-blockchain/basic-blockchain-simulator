@@ -21,6 +21,7 @@ Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versi
 | [Flow Diagrams](docs/flows.md) | Mermaid diagrams for every major operation |
 | [Use Cases](docs/use-cases.md) | UC catalog with actors, flows, pre/postconditions |
 | [API Reference](docs/api-reference.md) | Complete endpoint specification with examples |
+| [Postman Collection](postman/) | Importable collection + environment for all endpoints |
 
 ---
 
