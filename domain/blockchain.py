@@ -5,7 +5,7 @@ import hashlib
 import json
 from statistics import mean
 
-from .models import Block
+from .models import Block, Transaction
 from .repository import BlockRepositoryProtocol
 
 
@@ -31,6 +31,9 @@ class InMemoryBlockRepository:
     def replace_all(self, blocks: list[Block]) -> None:
         self._blocks.clear()
         self._blocks.extend(blocks)
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        pass
 
 
 class BlockchainService:
@@ -115,6 +118,9 @@ class BlockchainService:
             except ValueError:
                 continue
         return round(mean(deltas), 3) if deltas else None
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        self._repo.save_confirmed_transactions(block_index, txs)
 
     def chain_as_dicts(self) -> list[dict[str, int | str]]:
         return [block.to_dict() for block in self._repo.get_all()]

@@ -57,10 +57,12 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
     proof = blockchain.proof_of_work(previous_proof)
     previous_hash = blockchain.hash_block(previous_block)
     block = blockchain.create_block(proof, previous_hash)
-    included = [tx.to_dict() for tx in mempool.flush()]
+    included = mempool.flush()
+    blockchain.save_confirmed_transactions(block.index, included)
+    included_dicts = [tx.to_dict() for tx in included]
     logger.info(
         "block_mined",
-        extra={"data": {"index": block.index, "proof": block.proof, "tx_count": len(included)}},
+        extra={"data": {"index": block.index, "proof": block.proof, "tx_count": len(included_dicts)}},
     )
     return {
         "message": "A block is MINED",
@@ -68,7 +70,7 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
         "timestamp": block.timestamp,
         "proof": block.proof,
         "previous_hash": block.previous_hash,
-        "transactions": included,
+        "transactions": included_dicts,
     }
 
 
