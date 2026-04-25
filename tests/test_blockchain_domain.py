@@ -1,4 +1,7 @@
+import pytest
+
 from domain import Block, BlockchainService, InMemoryBlockRepository, Transaction
+from domain.validation import validate_transaction
 
 
 def test_genesis_block_exists_on_init():
@@ -84,3 +87,36 @@ def test_difficulty_prefix_is_configurable():
     chain.create_block(proof=proof, previous_hash=previous_hash)
 
     assert chain.is_chain_valid() is True
+
+
+# ---------------------------------------------------------------------------
+# validate_transaction — whitespace-only sender / receiver (GAP-07)
+# ---------------------------------------------------------------------------
+
+def test_transaction_rejects_sender_with_only_spaces():
+    tx = Transaction(sender="   ", receiver="bob", amount=1.0)
+    with pytest.raises(ValueError, match="sender"):
+        validate_transaction(tx)
+
+
+def test_transaction_rejects_sender_with_only_tab():
+    tx = Transaction(sender="\t", receiver="bob", amount=1.0)
+    with pytest.raises(ValueError, match="sender"):
+        validate_transaction(tx)
+
+
+def test_transaction_rejects_receiver_with_only_spaces():
+    tx = Transaction(sender="alice", receiver="   ", amount=1.0)
+    with pytest.raises(ValueError, match="receiver"):
+        validate_transaction(tx)
+
+
+def test_transaction_rejects_receiver_with_mixed_whitespace():
+    tx = Transaction(sender="alice", receiver=" \t\n", amount=1.0)
+    with pytest.raises(ValueError, match="receiver"):
+        validate_transaction(tx)
+
+
+def test_transaction_accepts_sender_with_surrounding_spaces():
+    tx = Transaction(sender=" alice ", receiver="bob", amount=1.0)
+    validate_transaction(tx)  # strip() != "" so valid — no exception raised
