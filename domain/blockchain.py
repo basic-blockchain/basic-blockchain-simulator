@@ -5,7 +5,7 @@ import hashlib
 import json
 from statistics import mean
 
-from .models import Block
+from .models import Block, Transaction
 from .repository import BlockRepositoryProtocol
 
 
@@ -31,6 +31,9 @@ class InMemoryBlockRepository:
     def replace_all(self, blocks: list[Block]) -> None:
         self._blocks.clear()
         self._blocks.extend(blocks)
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        pass
 
 
 class BlockchainService:
