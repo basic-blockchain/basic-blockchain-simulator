@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from domain.models import Transaction
 
 _TRANSACTION_REQUIRED = ("sender", "receiver", "amount")
@@ -14,8 +16,8 @@ def parse_transaction(data: dict | None) -> Transaction:
         raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
     try:
-        amount = float(data["amount"])
-    except (TypeError, ValueError):
+        amount = Decimal(str(data["amount"]))
+    except InvalidOperation:
         raise ValueError("'amount' must be a number")
 
     return Transaction(

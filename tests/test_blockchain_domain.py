@@ -40,6 +40,33 @@ def test_transaction_serializes_to_dict():
     assert tx.to_dict() == {"sender": "alice", "receiver": "bob", "amount": 42.5}
 
 
+def test_transaction_amount_is_decimal():
+    from decimal import Decimal
+
+    tx = Transaction(sender="alice", receiver="bob", amount=42.5)
+
+    assert isinstance(tx.amount, Decimal)
+    assert tx.amount == Decimal("42.5")
+
+
+def test_transaction_float_coerced_without_precision_loss():
+    from decimal import Decimal
+
+    tx = Transaction(sender="a", receiver="b", amount=0.1)
+
+    assert tx.amount == Decimal("0.1")
+    assert tx.amount != Decimal(0.1)  # Decimal(float) preserves the imprecision
+
+
+def test_transaction_decimal_passthrough():
+    from decimal import Decimal
+
+    tx = Transaction(sender="a", receiver="b", amount=Decimal("99.99999999"))
+
+    assert tx.amount == Decimal("99.99999999")
+    assert isinstance(tx.amount, Decimal)
+
+
 def test_custom_repository_is_used_by_chain_service():
     repo = InMemoryBlockRepository()
     chain = BlockchainService(repository=repo)
