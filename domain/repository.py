@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import Block
+from .models import Block, Transaction
 
 
 class BlockRepositoryProtocol(Protocol):
@@ -11,3 +11,4 @@ class BlockRepositoryProtocol(Protocol):
     def last(self) -> Block: ...
     def count(self) -> int: ...
     def replace_all(self, blocks: list[Block]) -> None: ...
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None: ...

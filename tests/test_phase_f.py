@@ -128,3 +128,58 @@ async def test_request_id_propagated_from_header():
         custom_id = "test-req-abc123"
         resp = await client.get("/api/v1/health", headers={"X-Request-ID": custom_id})
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# check_db_connectivity — unit tests with mocked psycopg2 (GAP-01)
+# ---------------------------------------------------------------------------
+
+def test_check_db_connectivity_returns_true_on_successful_query():
+    from unittest.mock import MagicMock, patch
+    from api.health import check_db_connectivity
+
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cursor.__enter__ = lambda s: s
+    mock_cursor.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("psycopg2.connect", return_value=mock_conn):
+        assert check_db_connectivity("postgresql://fake/db") is True
+
+
+def test_check_db_connectivity_returns_false_on_operational_error():
+    from unittest.mock import patch
+    import psycopg2
+    from api.health import check_db_connectivity
+
+    with patch("psycopg2.connect", side_effect=psycopg2.OperationalError("refused")):
+        assert check_db_connectivity("postgresql://bad/dsn") is False
+
+
+def test_check_db_connectivity_returns_false_on_any_exception():
+    from unittest.mock import patch
+    from api.health import check_db_connectivity
+
+    with patch("psycopg2.connect", side_effect=RuntimeError("unexpected")):
+        assert check_db_connectivity("postgresql://fake/db") is False
+
+
+def test_check_db_connectivity_returns_false_on_query_failure():
+    from unittest.mock import MagicMock, patch
+    import psycopg2
+    from api.health import check_db_connectivity
+
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cursor.__enter__ = lambda s: s
+    mock_cursor.__exit__ = MagicMock(return_value=False)
+    mock_cursor.execute.side_effect = psycopg2.OperationalError("query failed")
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("psycopg2.connect", return_value=mock_conn):
+        assert check_db_connectivity("postgresql://fake/db") is False

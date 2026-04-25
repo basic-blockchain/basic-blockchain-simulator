@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 
 
 @dataclass(slots=True)
@@ -18,7 +19,11 @@ class Block:
 class Transaction:
     sender: str
     receiver: str
-    amount: float
+    amount: Decimal
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.amount, Decimal):
+            self.amount = Decimal(str(self.amount))
 
     def to_dict(self) -> dict[str, float | str]:
-        return asdict(self)
+        return {"sender": self.sender, "receiver": self.receiver, "amount": float(self.amount)}
