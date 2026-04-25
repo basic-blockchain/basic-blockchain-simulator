@@ -120,3 +120,43 @@ async def test_wrong_method_returns_json_405():
         assert resp.status_code == 405
         body = await resp.get_json()
         assert body["code"] == "METHOD_NOT_ALLOWED"
+
+
+# ---------------------------------------------------------------------------
+# Input length validation
+# ---------------------------------------------------------------------------
+
+async def test_transaction_rejected_when_sender_exceeds_max_length():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        resp = await client.post(
+            "/api/v1/transactions",
+            json={"sender": "a" * 256, "receiver": "bob", "amount": 1.0},
+        )
+        assert resp.status_code == 400
+        body = await resp.get_json()
+        assert body["code"] == "VALIDATION_ERROR"
+        assert "sender" in body["error"]
+
+
+async def test_transaction_rejected_when_receiver_exceeds_max_length():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        resp = await client.post(
+            "/api/v1/transactions",
+            json={"sender": "alice", "receiver": "b" * 256, "amount": 1.0},
+        )
+        assert resp.status_code == 400
+        body = await resp.get_json()
+        assert body["code"] == "VALIDATION_ERROR"
+        assert "receiver" in body["error"]
+
+
+async def test_transaction_accepted_at_exact_max_length():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        resp = await client.post(
+            "/api/v1/transactions",
+            json={"sender": "a" * 255, "receiver": "b" * 255, "amount": 1.0},
+        )
+        assert resp.status_code == 201

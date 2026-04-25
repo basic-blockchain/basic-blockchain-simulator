@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 
 from .blockchain import BlockchainService
 from .models import Block
 from .node_registry import NodeRegistryProtocol
+
+logger = logging.getLogger("blockchain")
 
 
 class ConsensusService:
@@ -36,7 +39,8 @@ class ConsensusService:
                 )
                 for b in raw_blocks
             ]
-        except Exception:
+        except Exception as exc:
+            logger.warning("peer_fetch_failed", extra={"data": {"url": node_url, "error": str(exc)}})
             return None
 
     def resolve(self) -> bool:
