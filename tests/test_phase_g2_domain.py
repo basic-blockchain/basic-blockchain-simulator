@@ -184,3 +184,76 @@ def test_resolve_ignores_invalid_remote_chain():
         replaced = consensus.resolve()
 
     assert replaced is False
+
+
+# ---------------------------------------------------------------------------
+# ConsensusService._fetch_chain — real code path coverage (GAP-03)
+# ---------------------------------------------------------------------------
+
+def _make_consensus() -> ConsensusService:
+    return ConsensusService(
+        blockchain=BlockchainService(difficulty_prefix="0"),
+        registry=InMemoryNodeRegistry(),
+    )
+
+
+def test_fetch_chain_returns_none_for_non_http_scheme():
+    consensus = _make_consensus()
+    assert consensus._fetch_chain("ftp://peer:5001") is None
+
+
+def test_fetch_chain_returns_none_for_file_scheme():
+    consensus = _make_consensus()
+    assert consensus._fetch_chain("file:///etc/passwd") is None
+
+
+def test_fetch_chain_returns_none_on_network_error():
+    import urllib.error
+    consensus = _make_consensus()
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+        result = consensus._fetch_chain("http://dead-peer:9999")
+    assert result is None
+
+
+def test_fetch_chain_returns_none_on_malformed_json():
+    import io
+    consensus = _make_consensus()
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.read.return_value = b"not-valid-json{"
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = consensus._fetch_chain("http://bad-peer:5001")
+    assert result is None
+
+
+def test_fetch_chain_returns_none_when_block_missing_required_key():
+    import json as _json
+    consensus = _make_consensus()
+    payload = _json.dumps({"chain": [{"index": 1}]}).encode()  # missing timestamp/proof/previous_hash
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.read.return_value = payload
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = consensus._fetch_chain("http://incomplete-peer:5001")
+    assert result is None
+
+
+def test_fetch_chain_returns_blocks_on_valid_response():
+    import json as _json
+    from domain.models import Block
+    remote = _build_svc(extra_blocks=1)
+    chain_data = _json.dumps(
+        {"chain": [b.to_dict() for b in remote._repo.get_all()]}
+    ).encode()
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.read.return_value = chain_data
+    consensus = _make_consensus()
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = consensus._fetch_chain("http://healthy-peer:5001")
+    assert result is not None
+    assert len(result) == 2
+    assert all(isinstance(b, Block) for b in result)
