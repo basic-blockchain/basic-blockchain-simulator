@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait
 
 from .models import Transaction
 from .node_registry import NodeRegistryProtocol
+
+logger = logging.getLogger("blockchain")
 
 _PROPAGATION_WORKERS = 8
 
@@ -29,8 +32,8 @@ class PropagationService:
             )
             with urllib.request.urlopen(req, timeout=self._timeout):  # nosec B310 — scheme validated above
                 pass
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("peer_post_failed", extra={"data": {"url": url, "error": str(exc)}})
 
     def _get(self, url: str) -> None:
         if not url.startswith(("http://", "https://")):
@@ -38,8 +41,8 @@ class PropagationService:
         try:
             with urllib.request.urlopen(url, timeout=self._timeout):  # nosec B310 — scheme validated above
                 pass
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("peer_get_failed", extra={"data": {"url": url, "error": str(exc)}})
 
     def broadcast_transaction(self, tx: Transaction) -> None:
         nodes = self._registry.all()

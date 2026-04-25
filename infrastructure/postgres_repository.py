@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import psycopg2
 
-from domain.models import Block
+from domain.models import Block, Transaction
 
 
 class PostgresBlockRepository:
@@ -54,3 +54,12 @@ class PostgresBlockRepository:
                     "INSERT INTO blocks (index, timestamp, proof, previous_hash) VALUES (%s, %s, %s, %s)",
                     (b.index, b.timestamp, b.proof, b.previous_hash),
                 )
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        if not txs:
+            return
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO transactions (block_index, sender, receiver, amount) VALUES (%s, %s, %s, %s)",
+                [(block_index, tx.sender, tx.receiver, tx.amount) for tx in txs],
+            )
