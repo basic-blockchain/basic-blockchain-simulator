@@ -1,13 +1,13 @@
 # Blockchain Simulator
 
-![Version](https://img.shields.io/badge/version-v0.7.0-blue)
+![Version](https://img.shields.io/badge/version-v0.9.0-blue)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-71%20passed-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-81%25-green)
+![Tests](https://img.shields.io/badge/tests-96%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-86%25-green)
 
-**Latest stable release:** v0.7.0
+**Latest stable release:** v0.9.0
 
-Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, validate chain integrity, synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
+Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, query confirmed transaction history, validate chain integrity, synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
 
 ---
 
@@ -109,6 +109,7 @@ Base path: `/api/v1`
 | `GET` | `/valid` | Chain integrity check |
 | `POST` | `/transactions` | Add a pending transaction to the mempool |
 | `GET` | `/transactions/pending` | List pending transactions |
+| `GET` | `/transactions` | List confirmed transactions (full history) |
 | `GET` | `/health` | Node health: DB connectivity + chain height |
 | `GET` | `/metrics` | Chain height, pending tx count, avg mine time |
 | `POST` | `/nodes/register` | Register one or more peer node URLs |
