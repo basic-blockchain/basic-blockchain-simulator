@@ -15,6 +15,7 @@ DIFFICULTY_PREFIX = "00000"
 class InMemoryBlockRepository:
     def __init__(self) -> None:
         self._blocks: list[Block] = []
+        self._confirmed: list[dict[str, object]] = []
 
     def get_all(self) -> list[Block]:
         return self._blocks
@@ -33,7 +34,21 @@ class InMemoryBlockRepository:
         self._blocks.extend(blocks)
 
     def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
-        pass
+        block = next((b for b in self._blocks if b.index == block_index), None)
+        block_timestamp = block.timestamp if block is not None else ""
+        for tx in txs:
+            self._confirmed.append(
+                {
+                    "block_index": block_index,
+                    "block_timestamp": block_timestamp,
+                    "sender": tx.sender,
+                    "receiver": tx.receiver,
+                    "amount": float(tx.amount),
+                }
+            )
+
+    def get_confirmed_transactions(self) -> list[dict[str, object]]:
+        return list(self._confirmed)
 
 
 class BlockchainService:
@@ -121,6 +136,9 @@ class BlockchainService:
 
     def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
         self._repo.save_confirmed_transactions(block_index, txs)
+
+    def confirmed_transactions(self) -> list[dict[str, object]]:
+        return self._repo.get_confirmed_transactions()
 
     def chain_as_dicts(self) -> list[dict[str, int | str]]:
         return [block.to_dict() for block in self._repo.get_all()]
