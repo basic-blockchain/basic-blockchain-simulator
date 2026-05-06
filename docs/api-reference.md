@@ -203,6 +203,55 @@ Returns all transactions currently in the mempool (non-destructive).
 
 ---
 
+### GET /api/v1/transactions
+
+Returns the full history of confirmed transactions (those persisted to the
+`transactions` table when their containing block was mined). The list is
+ordered ascending by `block_index`, then by insertion order within each
+block. Each entry includes the confirming block index and the block
+timestamp so clients can reconstruct timeline views without a separate
+chain query.
+
+This endpoint is the read-side companion of the mining flow: when
+`POST /api/v1/mine_block` runs, the mempool is flushed and its contents
+inserted into the `transactions` table — making them queryable here for
+the lifetime of the chain. Unlike `/transactions/pending`, this list
+survives node restarts, page reloads, and cache clears.
+
+**Response 200**
+```json
+{
+  "transactions": [
+    {
+      "sender":          "alice",
+      "receiver":        "bob",
+      "amount":          10.5,
+      "block_index":     2,
+      "block_timestamp": "2026-05-06 12:34:56.789012"
+    }
+  ],
+  "count": 1
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sender` | string | Sender as recorded in the original mempool entry |
+| `receiver` | string | Receiver as recorded in the original mempool entry |
+| `amount` | number | Confirmed amount (always positive) |
+| `block_index` | integer | Index of the block that contains the transaction |
+| `block_timestamp` | string | Timestamp of the confirming block (ISO-like, server-local) |
+
+**Notes**
+
+- In-memory mode keeps confirmed records inside `InMemoryBlockRepository` —
+  they survive within the same process but are lost on restart. Use the
+  PostgreSQL backend for cross-restart durability.
+- Empty response (`{ "transactions": [], "count": 0 }`) is returned when no
+  block has been mined yet on this node.
+
+---
+
 ### POST /api/v1/nodes/register
 
 Registers one or more peer node URLs.
