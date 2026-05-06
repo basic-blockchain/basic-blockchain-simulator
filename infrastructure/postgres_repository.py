@@ -63,3 +63,23 @@ class PostgresBlockRepository:
                 "INSERT INTO transactions (block_index, sender, receiver, amount) VALUES (%s, %s, %s, %s)",
                 [(block_index, tx.sender, tx.receiver, tx.amount) for tx in txs],
             )
+
+    def get_confirmed_transactions(self) -> list[dict[str, object]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT t.block_index, b.timestamp, t.sender, t.receiver, t.amount "
+                "FROM transactions t "
+                "JOIN blocks b ON b.index = t.block_index "
+                "ORDER BY t.block_index ASC, t.id ASC"
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "block_index": int(row[0]),
+                "block_timestamp": row[1],
+                "sender": row[2],
+                "receiver": row[3],
+                "amount": float(row[4]),
+            }
+            for row in rows
+        ]

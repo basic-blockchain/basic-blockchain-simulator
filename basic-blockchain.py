@@ -159,6 +159,11 @@ def create_app(
         pending = [tx.to_dict() for tx in pool.pending()]
         return jsonify({"transactions": pending, "count": len(pending)}), 200
 
+    @api_v1.route("/transactions", methods=["GET"])
+    async def v1_confirmed_transactions():
+        confirmed = chain_service.confirmed_transactions()
+        return jsonify({"transactions": confirmed, "count": len(confirmed)}), 200
+
     @api_v1.route("/nodes/register", methods=["POST"])
     async def v1_nodes_register():
         data = await request.get_json(silent=True)
