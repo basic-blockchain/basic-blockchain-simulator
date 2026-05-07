@@ -188,10 +188,29 @@ class BlockchainService:
         return round(mean(deltas), 3) if deltas else None
 
     def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        # Kept for backward compatibility: in the Phase H+ flow, transactions
+        # are persisted by the same DB transaction that writes the block (see
+        # `repo.append`), so production code no longer calls this. External
+        # callers (e.g. legacy test fixtures) can still invoke it.
         self._repo.save_confirmed_transactions(block_index, txs)
 
     def confirmed_transactions(self) -> list[dict[str, object]]:
-        return self._repo.get_confirmed_transactions()
+        # Single source of truth: the chain itself. Each block carries its
+        # transactions (hydrated at read time from the `transactions` table),
+        # so the flat history is just a flatten over `chain.blocks[*].transactions`.
+        confirmed: list[dict[str, object]] = []
+        for block in self._repo.get_all():
+            for tx in block.transactions:
+                confirmed.append(
+                    {
+                        "block_index": block.index,
+                        "block_timestamp": block.timestamp,
+                        "sender": tx.sender,
+                        "receiver": tx.receiver,
+                        "amount": float(tx.amount),
+                    }
+                )
+        return confirmed
 
     def chain_as_dicts(self) -> list[dict[str, object]]:
         return [block.to_dict() for block in self._repo.get_all()]

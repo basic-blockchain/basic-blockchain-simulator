@@ -139,9 +139,10 @@ def test_confirmed_transactions_written_on_mine(clean_db):
 
     prev = svc.previous_block()
     proof = svc.proof_of_work(prev.proof)
-    block = svc.create_block(proof=proof, previous_hash=svc.hash_block(prev))
     txs = pool.flush()
-    svc.save_confirmed_transactions(block.index, txs)
+    block = svc.create_block(
+        proof=proof, previous_hash=svc.hash_block(prev), transactions=txs
+    )
 
     conn = psycopg2.connect(clean_db)
     with conn, conn.cursor() as cur:
@@ -165,8 +166,9 @@ def test_no_transactions_written_when_mempool_empty(clean_db):
 
     prev = svc.previous_block()
     proof = svc.proof_of_work(prev.proof)
-    block = svc.create_block(proof=proof, previous_hash=svc.hash_block(prev))
-    svc.save_confirmed_transactions(block.index, [])
+    block = svc.create_block(
+        proof=proof, previous_hash=svc.hash_block(prev), transactions=[]
+    )
 
     conn = psycopg2.connect(clean_db)
     with conn, conn.cursor() as cur:
@@ -188,9 +190,10 @@ def test_transactions_survive_service_restart(clean_db):
     pool.add(Transaction(sender="eve", receiver="frank", amount=10.0))
     prev = svc.previous_block()
     proof = svc.proof_of_work(prev.proof)
-    block = svc.create_block(proof=proof, previous_hash=svc.hash_block(prev))
     txs = pool.flush()
-    svc.save_confirmed_transactions(block.index, txs)
+    svc.create_block(
+        proof=proof, previous_hash=svc.hash_block(prev), transactions=txs
+    )
 
     # Simulate restart — fresh repo instances
     conn = psycopg2.connect(clean_db)
