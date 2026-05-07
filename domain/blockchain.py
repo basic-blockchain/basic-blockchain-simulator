@@ -11,6 +11,35 @@ from .repository import BlockRepositoryProtocol
 
 DIFFICULTY_PREFIX = "00000"
 
+# Merkle root for an empty transaction set. Documented constant so callers
+# (and reviewers) can verify the boundary case without re-deriving it.
+EMPTY_MERKLE_ROOT = hashlib.sha256(b"").hexdigest()
+
+
+def _compute_merkle_root(txs: list[Transaction]) -> str:
+    """Return the Merkle root over the supplied transactions.
+
+    Empty input yields ``EMPTY_MERKLE_ROOT``. Each leaf is the sha256 of the
+    transaction's canonical JSON. Internal nodes are sha256 of the
+    concatenation of their two child hex digests. Odd-sized levels duplicate
+    the last hash before pairing (Bitcoin convention) so the tree is always
+    balanced.
+    """
+    if not txs:
+        return EMPTY_MERKLE_ROOT
+    level: list[str] = [
+        hashlib.sha256(json.dumps(tx.to_dict(), sort_keys=True).encode()).hexdigest()
+        for tx in txs
+    ]
+    while len(level) > 1:
+        if len(level) % 2 == 1:
+            level.append(level[-1])
+        level = [
+            hashlib.sha256((level[i] + level[i + 1]).encode()).hexdigest()
+            for i in range(0, len(level), 2)
+        ]
+    return level[0]
+
 
 class InMemoryBlockRepository:
     def __init__(self) -> None:
@@ -66,12 +95,20 @@ class BlockchainService:
     def chain(self) -> list[Block]:
         return self._repo.get_all()
 
-    def create_block(self, proof: int, previous_hash: str) -> Block:
+    def create_block(
+        self,
+        proof: int,
+        previous_hash: str,
+        transactions: list[Transaction] | None = None,
+    ) -> Block:
+        txs = list(transactions) if transactions is not None else []
         block = Block(
             index=self._repo.count() + 1,
             timestamp=str(datetime.datetime.now()),
             proof=proof,
             previous_hash=previous_hash,
+            merkle_root=_compute_merkle_root(txs),
+            transactions=txs,
         )
         self._repo.append(block)
         return block
@@ -90,12 +127,28 @@ class BlockchainService:
             new_proof += 1
 
     def hash_block(self, block: Block) -> str:
-        encoded_block = json.dumps(block.to_dict(), sort_keys=True).encode()
-        return hashlib.sha256(encoded_block).hexdigest()
+        # Hash payload covers the block header *and* the Merkle root, so any
+        # change to a transaction (which would change the Merkle root) breaks
+        # the chain — but the raw transactions are not redundantly hashed.
+        payload = {
+            "index": block.index,
+            "timestamp": block.timestamp,
+            "proof": block.proof,
+            "previous_hash": block.previous_hash,
+            "merkle_root": block.merkle_root,
+        }
+        encoded = json.dumps(payload, sort_keys=True).encode()
+        return hashlib.sha256(encoded).hexdigest()
 
     def _validate_blocks(self, blocks: list[Block]) -> bool:
         if not blocks:
             return False
+        # Every block's stored Merkle root must match its actual transactions.
+        # Without this check, mutating a row in the `transactions` table would
+        # not be detectable from the chain hash alone.
+        for block in blocks:
+            if _compute_merkle_root(block.transactions) != block.merkle_root:
+                return False
         previous_block = blocks[0]
         for block in blocks[1:]:
             if block.previous_hash != self.hash_block(previous_block):
@@ -140,5 +193,5 @@ class BlockchainService:
     def confirmed_transactions(self) -> list[dict[str, object]]:
         return self._repo.get_confirmed_transactions()
 
-    def chain_as_dicts(self) -> list[dict[str, int | str]]:
+    def chain_as_dicts(self) -> list[dict[str, object]]:
         return [block.to_dict() for block in self._repo.get_all()]
