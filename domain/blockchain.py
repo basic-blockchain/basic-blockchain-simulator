@@ -85,9 +85,15 @@ class BlockchainService:
         self,
         difficulty_prefix: str = DIFFICULTY_PREFIX,
         repository: BlockRepositoryProtocol | None = None,
+        wallet_repo: object | None = None,
     ) -> None:
         self._difficulty_prefix = difficulty_prefix
         self._repo: BlockRepositoryProtocol = repository or InMemoryBlockRepository()
+        # Optional `wallet_repo` enables Phase I.3 per-transaction
+        # signature verification inside `_validate_blocks`. Pre-Phase-I
+        # call sites (and unit tests that never mint a wallet) keep
+        # working with `wallet_repo=None`.
+        self._wallet_repo = wallet_repo
         if self._repo.count() == 0:
             self.create_block(proof=1, previous_hash="0")
 
@@ -143,12 +149,45 @@ class BlockchainService:
     def _validate_blocks(self, blocks: list[Block]) -> bool:
         if not blocks:
             return False
+        # Phase I.3 — verify each transfer's signature against its sender
+        # wallet's recorded public key. Coinbase / mint transactions
+        # carry the sentinel `signature == "MINT"` and skip the ECDSA
+        # check (the system mints its own coin and there is no private
+        # key to sign with).
+        from domain.crypto import canonical_transfer_message, verify
+        from domain.wallet import COINBASE_SIGNATURE
+
+        # The validator works against an optional wallet repository
+        # injected at construction time; without it (in-memory tests
+        # that do not exercise wallets) signature verification is
+        # skipped because there are no public keys to verify against.
+        wallet_repo = getattr(self, "_wallet_repo", None)
+
         # Every block's stored Merkle root must match its actual transactions.
         # Without this check, mutating a row in the `transactions` table would
         # not be detectable from the chain hash alone.
         for block in blocks:
             if _compute_merkle_root(block.transactions) != block.merkle_root:
                 return False
+            if wallet_repo is not None:
+                for tx in block.transactions:
+                    if tx.signature == COINBASE_SIGNATURE:
+                        continue
+                    if not tx.sender_wallet_id or not tx.signature:
+                        # Non-coinbase tx without wallet ID / signature
+                        # is a Phase-I.3-era invalid record.
+                        return False
+                    sender = wallet_repo.get_wallet(tx.sender_wallet_id)
+                    if sender is None:
+                        return False
+                    message = canonical_transfer_message(
+                        sender_wallet_id=tx.sender_wallet_id,
+                        receiver_wallet_id=tx.receiver_wallet_id,
+                        amount=tx.amount,
+                        nonce=tx.nonce,
+                    )
+                    if not verify(sender.public_key, tx.signature, message):
+                        return False
         previous_block = blocks[0]
         for block in blocks[1:]:
             if block.previous_hash != self.hash_block(previous_block):

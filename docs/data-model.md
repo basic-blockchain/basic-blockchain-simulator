@@ -35,6 +35,24 @@ class JWTPayload:
     exp:   int
 ```
 
+### Wallet (Phase I.3, v0.13.0)
+
+```python
+@dataclass
+class WalletRecord:
+    wallet_id:  str          # 'w_' + 16 hex chars (server-generated)
+    user_id:    str          # FK to users.user_id
+    currency:   str          # 'NATIVE' until Phase J
+    balance:    Decimal      # NUMERIC(28,8); changes only when a block is mined
+    public_key: str          # 33-byte secp256k1 compressed hex
+    frozen:     bool         # ADMIN can flip via /admin/users/<id>/freeze (Phase I.3 wires only the underlying capability; explicit endpoint lands later)
+```
+
+Mnemonic-side state lives **only** in the response of
+`POST /api/v1/wallets`. The server sees the seed bytes during keypair
+derivation and discards them; nothing about the mnemonic is logged or
+persisted.
+
 ### Block
 
 ```python
@@ -150,6 +168,23 @@ erDiagram
         varchar      target_id       "subject of the action; nullable"
         jsonb        details         "action-specific payload"
         timestamptz  created_at
+    }
+
+    wallets {
+        varchar      wallet_id      PK  "w_<hex16> — server-generated"
+        varchar      user_id            "FK to users.user_id ON DELETE CASCADE"
+        varchar      currency           "default 'NATIVE' (Phase J: multi-currency)"
+        numeric_28_8 balance            "DEFAULT 0; updated on mine"
+        text         public_key         "33-byte secp256k1 compressed hex"
+        boolean      frozen             "DEFAULT FALSE"
+        timestamptz  created_at
+        timestamptz  updated_at
+    }
+
+    wallet_nonces {
+        varchar      wallet_id        PK  "FK to wallets.wallet_id ON DELETE CASCADE"
+        bigint       last_used_nonce      "monotonic — only stricter values accepted"
+        timestamptz  last_used_at
     }
 
     schema_migrations {

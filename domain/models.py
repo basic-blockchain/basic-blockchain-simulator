@@ -9,13 +9,28 @@ class Transaction:
     sender: str
     receiver: str
     amount: Decimal
+    # Phase I.3 fields — wallet IDs, replay-protection nonce, ECDSA signature.
+    # Default to empty strings / 0 so legacy code paths (system-issued
+    # coinbase transactions, tests built before I.3) still construct.
+    sender_wallet_id: str = ""
+    receiver_wallet_id: str = ""
+    nonce: int = 0
+    signature: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.amount, Decimal):
             self.amount = Decimal(str(self.amount))
 
-    def to_dict(self) -> dict[str, float | str]:
-        return {"sender": self.sender, "receiver": self.receiver, "amount": float(self.amount)}
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sender": self.sender,
+            "receiver": self.receiver,
+            "amount": float(self.amount),
+            "sender_wallet_id": self.sender_wallet_id,
+            "receiver_wallet_id": self.receiver_wallet_id,
+            "nonce": self.nonce,
+            "signature": self.signature,
+        }
 
 
 @dataclass(slots=True)
