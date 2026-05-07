@@ -3,3 +3,5 @@ psycopg2-binary>=2.9,<3.0
 python-dotenv>=1.0,<2.0
 PyJWT>=2.8
 bcrypt>=4.1
+mnemonic>=0.21
+coincurve>=20.0

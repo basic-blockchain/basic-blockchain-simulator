@@ -40,7 +40,18 @@ def test_tampered_chain_becomes_invalid():
 def test_transaction_serializes_to_dict():
     tx = Transaction(sender="alice", receiver="bob", amount=42.5)
 
-    assert tx.to_dict() == {"sender": "alice", "receiver": "bob", "amount": 42.5}
+    # Phase I.3 expanded the Transaction shape with wallet IDs / nonce /
+    # signature; defaults keep the dict shape stable across the new
+    # fields when the v0.10.0 / legacy callers do not supply them.
+    assert tx.to_dict() == {
+        "sender": "alice",
+        "receiver": "bob",
+        "amount": 42.5,
+        "sender_wallet_id": "",
+        "receiver_wallet_id": "",
+        "nonce": 0,
+        "signature": "",
+    }
 
 
 def test_transaction_amount_is_decimal():
