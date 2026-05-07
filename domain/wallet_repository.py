@@ -1,0 +1,201 @@
+"""Wallet persistence contract + an in-memory implementation for tests.
+
+The PostgreSQL implementation lives in
+`infrastructure/postgres_wallet_store.py`. The HTTP layer talks to
+whichever adapter the app factory injects.
+
+The contract here is intentionally narrow: CRUD for wallets, nonce
+gating, balance mutation, and the read paths the API needs. The actual
+business logic (mnemonic generation, signature verification, supply
+conservation) lives in `domain/wallet.py` so this protocol stays a pure
+storage contract.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Protocol
+
+
+@dataclass(slots=True)
+class WalletRecord:
+    wallet_id: str
+    user_id: str
+    currency: str
+    balance: Decimal
+    public_key: str
+    frozen: bool
+
+
+class WalletNotFoundError(Exception):
+    """Raised when a wallet ID does not exist."""
+
+
+class WalletFrozenError(Exception):
+    """Raised when a transfer is attempted on a frozen wallet."""
+
+
+class NonceReplayError(Exception):
+    """Raised when an incoming transfer's nonce is not strictly greater
+    than the wallet's last_used_nonce."""
+
+
+class InsufficientBalanceError(Exception):
+    """Raised when a transfer / mint exceeds the sender's balance."""
+
+
+class WalletRepositoryProtocol(Protocol):
+    def create_wallet(
+        self,
+        *,
+        wallet_id: str,
+        user_id: str,
+        public_key: str,
+        currency: str = "NATIVE",
+    ) -> None: ...
+
+    def get_wallet(self, wallet_id: str) -> WalletRecord | None: ...
+
+    def list_user_wallets(self, user_id: str) -> list[WalletRecord]: ...
+
+    def set_frozen(self, *, wallet_id: str, frozen: bool) -> None: ...
+
+    def reserve_nonce(self, *, wallet_id: str, nonce: int) -> None:
+        """Atomically check-and-update wallet_nonces.
+
+        Raises `NonceReplayError` if `nonce <= last_used_nonce`. On
+        success the row is upserted with `last_used_nonce = nonce`.
+        """
+        ...
+
+    def apply_transfer(
+        self,
+        *,
+        sender_wallet_id: str,
+        receiver_wallet_id: str,
+        amount: Decimal,
+    ) -> None:
+        """Debit sender, credit receiver in one transaction. Raises
+        `InsufficientBalanceError` / `WalletFrozenError` on guard
+        failures."""
+        ...
+
+    def credit(self, *, wallet_id: str, amount: Decimal) -> None:
+        """Increase a wallet's balance (used by mint / coinbase)."""
+        ...
+
+    def total_supply(self) -> Decimal:
+        """Sum of every wallet's balance — invariant for the
+        conservation-of-supply test."""
+        ...
+
+
+class InMemoryWalletStore:
+    """Wallet store that lives in process memory. Used by unit tests so
+    the wallet/transfer flow can be exercised without a database."""
+
+    def __init__(self) -> None:
+        self._wallets: dict[str, WalletRecord] = {}
+        self._nonces: dict[str, int] = {}
+
+    def create_wallet(
+        self,
+        *,
+        wallet_id: str,
+        user_id: str,
+        public_key: str,
+        currency: str = "NATIVE",
+    ) -> None:
+        if wallet_id in self._wallets:
+            raise ValueError(f"Wallet {wallet_id} already exists")
+        self._wallets[wallet_id] = WalletRecord(
+            wallet_id=wallet_id,
+            user_id=user_id,
+            currency=currency,
+            balance=Decimal(0),
+            public_key=public_key,
+            frozen=False,
+        )
+
+    def get_wallet(self, wallet_id: str) -> WalletRecord | None:
+        return self._wallets.get(wallet_id)
+
+    def list_user_wallets(self, user_id: str) -> list[WalletRecord]:
+        return [w for w in self._wallets.values() if w.user_id == user_id]
+
+    def set_frozen(self, *, wallet_id: str, frozen: bool) -> None:
+        w = self._wallets.get(wallet_id)
+        if w is None:
+            raise WalletNotFoundError(wallet_id)
+        self._wallets[wallet_id] = WalletRecord(
+            wallet_id=w.wallet_id,
+            user_id=w.user_id,
+            currency=w.currency,
+            balance=w.balance,
+            public_key=w.public_key,
+            frozen=frozen,
+        )
+
+    def reserve_nonce(self, *, wallet_id: str, nonce: int) -> None:
+        last = self._nonces.get(wallet_id, 0)
+        if nonce <= last:
+            raise NonceReplayError(
+                f"nonce {nonce} <= last used {last} for wallet {wallet_id}"
+            )
+        self._nonces[wallet_id] = nonce
+
+    def apply_transfer(
+        self,
+        *,
+        sender_wallet_id: str,
+        receiver_wallet_id: str,
+        amount: Decimal,
+    ) -> None:
+        sender = self._wallets.get(sender_wallet_id)
+        receiver = self._wallets.get(receiver_wallet_id)
+        if sender is None:
+            raise WalletNotFoundError(sender_wallet_id)
+        if receiver is None:
+            raise WalletNotFoundError(receiver_wallet_id)
+        if sender.frozen:
+            raise WalletFrozenError(sender_wallet_id)
+        if receiver.frozen:
+            raise WalletFrozenError(receiver_wallet_id)
+        if sender.balance < amount:
+            raise InsufficientBalanceError(sender_wallet_id)
+        # Replace records with new balances (frozen-state preserving).
+        self._wallets[sender_wallet_id] = WalletRecord(
+            wallet_id=sender.wallet_id,
+            user_id=sender.user_id,
+            currency=sender.currency,
+            balance=sender.balance - amount,
+            public_key=sender.public_key,
+            frozen=sender.frozen,
+        )
+        self._wallets[receiver_wallet_id] = WalletRecord(
+            wallet_id=receiver.wallet_id,
+            user_id=receiver.user_id,
+            currency=receiver.currency,
+            balance=receiver.balance + amount,
+            public_key=receiver.public_key,
+            frozen=receiver.frozen,
+        )
+
+    def credit(self, *, wallet_id: str, amount: Decimal) -> None:
+        w = self._wallets.get(wallet_id)
+        if w is None:
+            raise WalletNotFoundError(wallet_id)
+        if w.frozen:
+            raise WalletFrozenError(wallet_id)
+        self._wallets[wallet_id] = WalletRecord(
+            wallet_id=w.wallet_id,
+            user_id=w.user_id,
+            currency=w.currency,
+            balance=w.balance + amount,
+            public_key=w.public_key,
+            frozen=w.frozen,
+        )
+
+    def total_supply(self) -> Decimal:
+        return sum((w.balance for w in self._wallets.values()), Decimal(0))
