@@ -213,6 +213,112 @@ Returns the most recent admin audit entries (newest first). Optional
 
 ---
 
+## Wallet endpoints (Phase I.3, v0.13.0)
+
+Each wallet owns a secp256k1 keypair derived from a 12-word BIP-39
+mnemonic. The server persists only `wallets.public_key`. Transfers
+must be signed locally with the mnemonic-derived private key.
+
+The canonical signing message (UTF-8 bytes):
+
+```
+f"{sender_wallet_id}:{receiver_wallet_id}:{amount}:{nonce}"
+```
+
+`amount` is the plain decimal string (no exponent), `nonce` is a
+positive integer strictly greater than the wallet's last accepted
+nonce. The reference Python helper is
+`domain.crypto.canonical_transfer_message(...)`.
+
+### POST /api/v1/wallets  *(permission CREATE_WALLET)*
+
+Body: `{}` (currency defaults to `NATIVE`; multi-currency lands in
+Phase J).
+
+**Response 201**
+```json
+{
+  "wallet_id": "w_a3b41c…",
+  "public_key": "02f3…ab",
+  "mnemonic": "twelve words you must record now this is the only time the server returns it",
+  "warning": "This mnemonic is shown only once. Store it securely. It is the only way to authorise transfers from this wallet."
+}
+```
+
+The mnemonic is **not** persisted on the server. Lose it and the
+wallet is unrecoverable (the server can still freeze it via ADMIN, but
+no signed transfer will ever be possible from that wallet again).
+
+### GET /api/v1/wallets/me
+
+Lists the current user's wallets (no mnemonic, no private material).
+
+```json
+{
+  "wallets": [
+    {
+      "wallet_id": "w_a3b41c…",
+      "user_id": "…",
+      "currency": "NATIVE",
+      "balance": 70.0,
+      "public_key": "02f3…ab",
+      "frozen": false
+    }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/v1/transactions/signed  *(permission TRANSFER)*
+
+```json
+{
+  "sender_wallet_id":   "w_a3b41c…",
+  "receiver_wallet_id": "w_77ee92…",
+  "amount":             30,
+  "nonce":              1,
+  "signature":          "abcdef0123…"
+}
+```
+
+**Response 201**
+```json
+{
+  "message": "Transaction admitted",
+  "transaction": { "sender": "alice", "receiver": "bob", "amount": 30.0,
+                    "sender_wallet_id": "w_a3b41c…", "receiver_wallet_id": "w_77ee92…",
+                    "nonce": 1, "signature": "abcdef…" }
+}
+```
+
+The transfer is added to the mempool. Balances move when the next
+block is mined. Error codes:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Body shape, missing fields, zero/negative amount, sender == receiver, etc. |
+| 400 | `WALLET_NOT_FOUND` | One of the wallet IDs does not exist |
+| 400 | `WALLET_OWNERSHIP` | Caller does not own the sender wallet |
+| 400 | `WALLET_FROZEN` | Either wallet is frozen |
+| 400 | `INSUFFICIENT_BALANCE` | Sender does not have enough |
+| 400 | `SIGNATURE_INVALID` | Signature does not verify against the sender wallet's public key |
+| 400 | `NONCE_REPLAY` | Nonce is not strictly greater than the wallet's last used nonce |
+
+### POST /api/v1/admin/mint  *(permission MINT — NOT in ADMIN baseline)*
+
+Coinbase credit. ADMIN must self-grant `MINT` via
+`POST /admin/users/<self>/permissions` before this route works. The
+mint lands in the mempool as a transaction with `signature == "MINT"`
+and credits the receiver wallet at the next mine.
+
+```json
+{ "wallet_id": "w_a3b41c…", "amount": 100 }
+```
+
+Response: `{"message": "Mint queued", "transaction": {...}}`.
+
+---
+
 ## Endpoints
 
 ### GET /api/v1/
