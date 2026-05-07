@@ -4,12 +4,19 @@ The real PostgreSQL implementation lives in
 `infrastructure/postgres_user_store.py`. The HTTP layer talks to whichever
 adapter the app factory injects; tests can use `InMemoryUserStore` to run
 without a database.
+
+Phase I.2 extends the surface to cover RBAC overrides
+(`get_role_overrides`, `grant_*` / `revoke_*` permission calls), the
+`banned` flag on users, and the audit log (`append_audit`,
+`recent_audit`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Protocol
+
+from domain.audit import AuditEntry
 
 
 @dataclass(slots=True)
@@ -18,6 +25,7 @@ class UserRecord:
     username: str
     display_name: str
     email: str | None = None
+    banned: bool = False
 
 
 @dataclass(slots=True)
@@ -66,9 +74,36 @@ class UserRepositoryProtocol(Protocol):
 
     def assign_role(self, *, user_id: str, role: str) -> None: ...
 
+    def revoke_role(self, *, user_id: str, role: str) -> None: ...
+
     def get_roles(self, user_id: str) -> list[str]: ...
 
     def count_users(self) -> int: ...
+
+    def list_users(self) -> list[UserRecord]: ...
+
+    def set_banned(self, *, user_id: str, banned: bool) -> None: ...
+
+    # Permission overrides (Phase I.2)
+    def get_role_overrides(self) -> dict[str, set[str]]: ...
+
+    def get_user_overrides(self, user_id: str) -> set[str]: ...
+
+    def grant_user_permission(self, *, user_id: str, permission: str) -> None: ...
+
+    def revoke_user_permission(self, *, user_id: str, permission: str) -> None: ...
+
+    # Audit log (Phase I.2)
+    def append_audit(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        target_id: str | None,
+        details: dict[str, object] | None = None,
+    ) -> None: ...
+
+    def recent_audit(self, limit: int = 50) -> list[AuditEntry]: ...
 
 
 class InMemoryUserStore:
@@ -82,6 +117,11 @@ class InMemoryUserStore:
         self._by_email: dict[str, str] = {}
         self._creds: dict[str, CredentialsRecord] = {}
         self._roles: dict[str, list[str]] = {}
+        # Phase I.2 — RBAC overrides + audit log.
+        self._role_overrides: dict[str, set[str]] = {}
+        self._user_overrides: dict[str, set[str]] = {}
+        self._audit: list[AuditEntry] = []
+        self._audit_seq = 0
 
     def create_user(
         self,
@@ -146,8 +186,67 @@ class InMemoryUserStore:
         if role not in self._roles[user_id]:
             self._roles[user_id].append(role)
 
+    def revoke_role(self, *, user_id: str, role: str) -> None:
+        if user_id in self._roles and role in self._roles[user_id]:
+            self._roles[user_id].remove(role)
+
     def get_roles(self, user_id: str) -> list[str]:
         return list(self._roles.get(user_id, []))
 
     def count_users(self) -> int:
         return len(self._users)
+
+    def list_users(self) -> list[UserRecord]:
+        return [self._users[uid] for uid in sorted(self._users)]
+
+    def set_banned(self, *, user_id: str, banned: bool) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        self._users[user_id] = UserRecord(
+            user_id=rec.user_id,
+            username=rec.username,
+            display_name=rec.display_name,
+            email=rec.email,
+            banned=banned,
+        )
+
+    # ── Permission overrides ───────────────────────────────────────
+
+    def get_role_overrides(self) -> dict[str, set[str]]:
+        return {role: set(perms) for role, perms in self._role_overrides.items()}
+
+    def get_user_overrides(self, user_id: str) -> set[str]:
+        return set(self._user_overrides.get(user_id, set()))
+
+    def grant_user_permission(self, *, user_id: str, permission: str) -> None:
+        self._user_overrides.setdefault(user_id, set()).add(permission)
+
+    def revoke_user_permission(self, *, user_id: str, permission: str) -> None:
+        if user_id in self._user_overrides:
+            self._user_overrides[user_id].discard(permission)
+
+    # ── Audit log ──────────────────────────────────────────────────
+
+    def append_audit(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        target_id: str | None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        self._audit_seq += 1
+        self._audit.append(
+            AuditEntry(
+                id=self._audit_seq,
+                actor_id=actor_id,
+                action=action,
+                target_id=target_id,
+                details=dict(details or {}),
+                created_at="now",
+            )
+        )
+
+    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
+        return list(reversed(self._audit[-limit:]))
