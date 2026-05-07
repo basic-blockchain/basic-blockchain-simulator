@@ -2,6 +2,39 @@
 
 ## 1. Domain Model (Python)
 
+### User identity (Phase I.1, v0.11.0)
+
+```python
+class Role(str, Enum):
+    ADMIN = "ADMIN"; OPERATOR = "OPERATOR"; VIEWER = "VIEWER"
+
+@dataclass
+class UserRecord:
+    user_id:      str   # 32-hex opaque server-generated id
+    username:     str   # unique handle, login subject
+    display_name: str
+    email:        str | None
+
+@dataclass
+class CredentialsRecord:
+    user_id:              str
+    password_hash:        str   # bcrypt; empty until activated
+    activation_code:      str | None
+    activated_at:         str | None
+    must_change_password: bool
+```
+
+JWT payload (HS256, default 30-min TTL):
+
+```python
+@dataclass(frozen=True)
+class JWTPayload:
+    sub:   str        # users.user_id
+    roles: list[str]  # ['ADMIN', 'OPERATOR', 'VIEWER'] subset
+    iat:   int
+    exp:   int
+```
+
 ### Block
 
 ```python
@@ -66,6 +99,31 @@ erDiagram
 
     nodes {
         text    url     PK  "normalised scheme://host:port"
+    }
+
+    users {
+        varchar      user_id      PK  "32-hex opaque server-generated ID"
+        varchar      username     UK  "1..64 chars, login handle"
+        varchar      display_name
+        varchar      email        UK  "optional"
+        timestamptz  created_at
+        timestamptz  updated_at
+    }
+
+    user_credentials {
+        varchar     user_id              PK  "FK to users.user_id ON DELETE CASCADE"
+        varchar     password_hash             "bcrypt(plain, BCRYPT_ROUNDS); empty until activated"
+        varchar     activation_code           "NULL after activation"
+        timestamptz activated_at              "NULL until activation"
+        boolean     must_change_password
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    user_roles {
+        varchar      user_id    "PK part 1, FK to users"
+        user_role    role       "PK part 2 — ENUM(ADMIN, OPERATOR, VIEWER)"
+        timestamptz  granted_at
     }
 
     schema_migrations {
