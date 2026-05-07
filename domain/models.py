@@ -1,18 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
-
-
-@dataclass(slots=True)
-class Block:
-    index: int
-    timestamp: str
-    proof: int
-    previous_hash: str
-
-    def to_dict(self) -> dict[str, int | str]:
-        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -27,3 +16,23 @@ class Transaction:
 
     def to_dict(self) -> dict[str, float | str]:
         return {"sender": self.sender, "receiver": self.receiver, "amount": float(self.amount)}
+
+
+@dataclass(slots=True)
+class Block:
+    index: int
+    timestamp: str
+    proof: int
+    previous_hash: str
+    merkle_root: str = ""
+    transactions: list[Transaction] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "timestamp": self.timestamp,
+            "proof": self.proof,
+            "previous_hash": self.previous_hash,
+            "merkle_root": self.merkle_root,
+            "transactions": [tx.to_dict() for tx in self.transactions],
+        }
