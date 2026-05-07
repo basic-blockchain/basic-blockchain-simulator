@@ -51,23 +51,46 @@ class Permission(str, Enum):
     VIEW_TRANSFERS = "VIEW_TRANSFERS"
 
 
-# Role baselines.
+# Role baselines — least-privilege by default.
 #
-# ADMIN gets every permission — the role exists to manage other users.
-# OPERATOR is "audit-light": runs their own wallet (CREATE_WALLET, TRANSFER)
-# AND can browse cross-user wallet/transfer history (read-only). They
-# cannot see the user-management surface (VIEW_USERS, BAN_USER, etc.).
-# VIEWER is the most-restricted role and the default for a brand-new user:
-# their own wallet operations only, no cross-user visibility.
+# ADMIN owns user/role/permission management AND their own wallet ops, but
+# does NOT receive financial-action permissions (MINT, FREEZE_WALLET,
+# UNFREEZE_WALLET) or cross-user data visibility (VIEW_WALLETS,
+# VIEW_TRANSFERS) for free. To mint coin, freeze a wallet, or browse
+# someone else's history, an ADMIN must grant themselves the specific
+# permission through `POST /api/v1/admin/users/<self>/permissions`. This
+# leaves an explicit audit_log row for every elevation and prevents a
+# single compromised ADMIN session from instantly accessing the supply or
+# every user's financial history.
 #
-# The audit / user-management permissions (VIEW_USERS, UPDATE_USER,
-# BAN_USER, ASSIGN_ROLE, MANAGE_PERMISSIONS, VIEW_AUDIT_LOG) are
-# deliberately ADMIN-only by default so the `/api/v1/admin/...` surface is
-# unreachable for non-admins. ADMINs that need to delegate one specific
-# capability can do so through the `user_permissions` override table
-# rather than by widening a role.
+# OPERATOR is "audit-light": own wallet ops + cross-user read of wallets
+# and transfers. Useful for compliance / monitoring roles that need to
+# inspect activity without being able to manage users or mint coin.
+#
+# VIEWER is the default role assigned at registration: own wallet
+# operations only, no cross-user visibility, no admin surface.
+#
+# `MANAGE_PERMISSIONS` lives in ADMIN's baseline so the role can
+# self-elevate when needed; the action is audited via the `audit_log`
+# table written by `/api/v1/admin/users/<id>/permissions`.
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    Role.ADMIN.value: {p.value for p in Permission},
+    Role.ADMIN.value: {
+        # User & role management
+        Permission.CREATE_USER.value,
+        Permission.VIEW_USERS.value,
+        Permission.UPDATE_USER.value,
+        Permission.BAN_USER.value,
+        Permission.UNBAN_USER.value,
+        Permission.ASSIGN_ROLE.value,
+        Permission.MANAGE_PERMISSIONS.value,
+        Permission.VIEW_AUDIT_LOG.value,
+        # Own wallet ops — admins are users too.
+        Permission.CREATE_WALLET.value,
+        Permission.TRANSFER.value,
+        # NOTE: MINT, FREEZE_WALLET, UNFREEZE_WALLET, VIEW_WALLETS, and
+        # VIEW_TRANSFERS are deliberately absent. Grant them per-admin via
+        # `user_permissions` when an operational need arises.
+    },
     Role.OPERATOR.value: {
         Permission.CREATE_WALLET.value,
         Permission.TRANSFER.value,

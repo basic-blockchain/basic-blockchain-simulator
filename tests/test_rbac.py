@@ -38,11 +38,50 @@ def _load_module():
 # ── Permission resolution unit tests ────────────────────────────────────
 
 
-def test_admin_holds_every_permission_by_default():
-    for perm in Permission:
+def test_admin_baseline_holds_user_management_only():
+    """ADMIN's hardcoded baseline covers user / role / permission
+    management plus the admin's own wallet ops. Financial-action and
+    cross-user data permissions are NOT in the baseline — they require
+    an explicit grant via `user_permissions`."""
+    granted_by_default = {
+        Permission.CREATE_USER,
+        Permission.VIEW_USERS,
+        Permission.UPDATE_USER,
+        Permission.BAN_USER,
+        Permission.UNBAN_USER,
+        Permission.ASSIGN_ROLE,
+        Permission.MANAGE_PERMISSIONS,
+        Permission.VIEW_AUDIT_LOG,
+        Permission.CREATE_WALLET,
+        Permission.TRANSFER,
+    }
+    not_granted_by_default = {
+        Permission.MINT,
+        Permission.FREEZE_WALLET,
+        Permission.UNFREEZE_WALLET,
+        Permission.VIEW_WALLETS,
+        Permission.VIEW_TRANSFERS,
+    }
+    for perm in granted_by_default:
         assert has_permission(
             user_id="u", roles=[Role.ADMIN.value], permission=perm.value
-        )
+        ), f"ADMIN should hold {perm.value} by default"
+    for perm in not_granted_by_default:
+        assert not has_permission(
+            user_id="u", roles=[Role.ADMIN.value], permission=perm.value
+        ), f"ADMIN should NOT hold {perm.value} by default"
+
+
+def test_admin_can_self_grant_data_permission_via_user_override():
+    """An ADMIN can call MANAGE_PERMISSIONS (in the baseline) to grant
+    themselves a financial-action permission without changing roles."""
+    overrides = {"u": {Permission.MINT.value}}
+    assert has_permission(
+        user_id="u",
+        roles=[Role.ADMIN.value],
+        permission=Permission.MINT.value,
+        user_overrides=overrides,
+    )
 
 
 def test_operator_can_transfer_but_cannot_ban_user():
