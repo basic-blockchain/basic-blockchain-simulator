@@ -59,11 +59,26 @@ comments and test cases.
 |----|------|-------------------|
 | BR-AU-01 | `users.username` is unique and 1..64 characters; `users.user_id` is a server-generated 32-hex string used as the JWT `sub` claim. | `migrations/V007` · `api/auth_routes.py` (`register`) |
 | BR-AU-02 | A newly registered user has `password_hash = ''` and an `activation_code`; login is denied until `POST /auth/activate` consumes the code and sets a bcrypt hash. Passwords must be at least 8 characters. | `api/auth_routes.py` (`register`, `activate`) |
-| BR-AU-03 | Login uniformly returns HTTP 400 with `code: AUTH_INVALID_CREDENTIALS` for missing user, wrong password, AND not-yet-activated account, to prevent account enumeration. | `api/auth_routes.py` (`login`) |
+| BR-AU-03 | Login uniformly returns HTTP 400 with `code: AUTH_INVALID_CREDENTIALS` for missing user, wrong password, not-yet-activated account, AND banned account, to prevent account enumeration. | `api/auth_routes.py` (`login`) |
 | BR-AU-04 | The first registered user whose username matches `BOOTSTRAP_ADMIN_USERNAME` (env var) is auto-promoted to `ADMIN`. Every other registration receives the default role `VIEWER`. The promotion only triggers when `users` is empty — later same-username registrations get the default role. | `api/auth_routes.py` (`register`) |
 | BR-AU-05 | JWTs are HS256 with a `{sub, roles, iat, exp}` payload and a configurable TTL (`JWT_TTL_SECONDS`, default 1800). Tampered tokens fail with HTTP 401 / `AUTH_INVALID_TOKEN`; expired tokens fail with HTTP 401 / `AUTH_EXPIRED_TOKEN`. | `domain/auth.py` (`create_jwt`/`decode_jwt`) · `api/auth_middleware.py` |
 | BR-AU-06 | The simulator refuses to start when `JWT_SECRET` is empty unless `TESTING=true` is set. The test suite uses a deterministic 38-byte sentinel so unit tests are reproducible without environment coupling. | `config.py` · `basic-blockchain.py` (`create_app`) |
 | BR-AU-07 | The middleware never persists the decoded token; it lives only on `g.current_user` for the duration of the request. Public endpoints (`/`, `/health`, `/chain`, `/valid`, `/auth/*`, legacy `/get_chain`/`/valid`) reach the route with `g.current_user = None`. | `api/auth_middleware.py` (`PUBLIC_PATHS`) |
+
+---
+
+## 6. Roles, Permissions & Audit Rules *(Phase I.2, v0.12.0)*
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-RB-01 | A protected route declares its requirement with `@require_permission(Permission.X)`. The decorator aborts with HTTP 401 / `AUTH_REQUIRED` when there is no authenticated user, and HTTP 403 / `FORBIDDEN` when the authenticated user lacks the permission. | `api/permissions.py` (`require_permission`) |
+| BR-RB-02 | Permission resolution is 3-level: (1) per-user grants in `user_permissions`, (2) per-role overrides in `role_permissions`, (3) hardcoded baseline in `ROLE_PERMISSIONS`. The first match short-circuits. | `domain/permissions.py` (`has_permission`) |
+| BR-RB-03 | When a `role_permissions` row exists for a role, it **replaces** the hardcoded baseline for that role rather than augmenting it. A row that lists fewer permissions than the baseline therefore reduces the role's surface — which is the whole point of the override table. | `domain/permissions.py` (`has_permission`) |
+| BR-RB-04 | ADMIN's hardcoded baseline covers the user/role/permission management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`, `BAN_USER`, `UNBAN_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`, `VIEW_AUDIT_LOG`) plus the admin's own wallet ops (`CREATE_WALLET`, `TRANSFER`). Financial-action permissions (`MINT`, `FREEZE_WALLET`, `UNFREEZE_WALLET`) and cross-user data visibility (`VIEW_WALLETS`, `VIEW_TRANSFERS`) are **not** in ADMIN's baseline — they require an explicit grant per admin via `POST /admin/users/<self>/permissions`. The grant is audited. | `domain/permissions.py` (`ROLE_PERMISSIONS`) |
+| BR-RB-05 | OPERATOR is "audit-light" by default: own wallet ops + cross-user read of wallets and transfers (`VIEW_WALLETS`, `VIEW_TRANSFERS`). VIEWER is the most-restricted role and the default at registration: own wallet ops only (`CREATE_WALLET`, `TRANSFER`). | `domain/permissions.py` (`ROLE_PERMISSIONS`) |
+| BR-RB-06 | Every state-mutating admin action (grant/revoke role, ban/unban user, grant/revoke permission) writes a row to `audit_log` with the actor, action, target, JSONB details, and a server-side `created_at`. The audit log is append-only by convention — no UPDATE / DELETE. | `domain/audit.py`, `api/admin_routes.py`, `infrastructure/postgres_user_store.py` |
+| BR-RB-07 | An admin cannot ban themselves; the ban endpoint returns HTTP 400 / `SELF_ACTION_FORBIDDEN` instead. This guarantees that at least the actor remains logged in to undo a wrong action. | `api/admin_routes.py` (`ban_user`) |
+| BR-RB-08 | A banned account is rejected at login with the uniform `AUTH_INVALID_CREDENTIALS` (BR-AU-03). Existing JWTs remain valid until expiry — server-side session revocation on ban is out of scope for v0.12.0. | `api/auth_routes.py` (`login`) |
 | BR-CH-03 | Chain replacement (consensus) is accepted only when the remote chain is strictly longer AND passes full validity checks. | `domain/consensus.py` (`resolve`) |
 | BR-CH-04 | The average mining time is computed only when the chain contains at least 2 blocks. With only the genesis block, `avg_mine_time_seconds` is `null`. | `domain/blockchain.py` (`avg_mine_time_seconds`) |
 

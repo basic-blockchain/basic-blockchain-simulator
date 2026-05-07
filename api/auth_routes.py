@@ -160,12 +160,14 @@ def build_auth_blueprint(
         cred = users.get_credentials(user.user_id) if user else None
         if user is None or cred is None or not cred.password_hash:
             # Same response for missing user / not-yet-activated / wrong
-            # password so the endpoint cannot be used to enumerate
-            # accounts.
+            # password / banned, so the endpoint cannot be used to
+            # enumerate accounts. (Phase I.2 BR-AU-03 + BR-RB-04.)
             return bad_request("Invalid credentials", "AUTH_INVALID_CREDENTIALS")
         if cred.activation_code is not None:
-            return bad_request("Account not activated", "AUTH_NOT_ACTIVATED")
+            return bad_request("Invalid credentials", "AUTH_INVALID_CREDENTIALS")
         if not verify_password(password, cred.password_hash):
+            return bad_request("Invalid credentials", "AUTH_INVALID_CREDENTIALS")
+        if user.banned:
             return bad_request("Invalid credentials", "AUTH_INVALID_CREDENTIALS")
 
         roles = users.get_roles(user.user_id)
