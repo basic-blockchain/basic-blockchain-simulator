@@ -51,27 +51,32 @@ class Permission(str, Enum):
     VIEW_TRANSFERS = "VIEW_TRANSFERS"
 
 
-# Role baselines. ADMIN gets everything. OPERATOR can run normal wallet
-# operations on its own account but cannot manage other users.
-# VIEWER is read-only across the surface, plus the basic wallet ops a
-# regular user needs to use the simulator.
+# Role baselines.
+#
+# ADMIN gets every permission — the role exists to manage other users.
+# OPERATOR is "audit-light": runs their own wallet (CREATE_WALLET, TRANSFER)
+# AND can browse cross-user wallet/transfer history (read-only). They
+# cannot see the user-management surface (VIEW_USERS, BAN_USER, etc.).
+# VIEWER is the most-restricted role and the default for a brand-new user:
+# their own wallet operations only, no cross-user visibility.
+#
+# The audit / user-management permissions (VIEW_USERS, UPDATE_USER,
+# BAN_USER, ASSIGN_ROLE, MANAGE_PERMISSIONS, VIEW_AUDIT_LOG) are
+# deliberately ADMIN-only by default so the `/api/v1/admin/...` surface is
+# unreachable for non-admins. ADMINs that need to delegate one specific
+# capability can do so through the `user_permissions` override table
+# rather than by widening a role.
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     Role.ADMIN.value: {p.value for p in Permission},
     Role.OPERATOR.value: {
-        Permission.VIEW_USERS.value,
-        Permission.UPDATE_USER.value,
         Permission.CREATE_WALLET.value,
         Permission.TRANSFER.value,
         Permission.VIEW_WALLETS.value,
         Permission.VIEW_TRANSFERS.value,
     },
     Role.VIEWER.value: {
-        Permission.VIEW_USERS.value,
-        Permission.UPDATE_USER.value,
         Permission.CREATE_WALLET.value,
         Permission.TRANSFER.value,
-        Permission.VIEW_WALLETS.value,
-        Permission.VIEW_TRANSFERS.value,
     },
 }
 
