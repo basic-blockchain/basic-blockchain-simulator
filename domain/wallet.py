@@ -204,13 +204,25 @@ def apply_block_deltas(
 ) -> None:
     """Apply balance deltas for every transaction in a freshly mined
     block. Coinbase / mint txns credit the receiver; regular transfers
-    debit sender + credit receiver atomically."""
+    debit sender + credit receiver atomically.
+
+    Back-compat: legacy v0.10.0 transactions submitted through
+    `POST /api/v1/transactions` carry empty `sender_wallet_id` /
+    `receiver_wallet_id` and no signature. They flow through the
+    mempool and land in blocks (so chain history records them) but do
+    NOT move balances — there are no wallets to credit. Phase I.4's
+    frontend will switch to `POST /api/v1/transactions/signed` and the
+    legacy path will become deprecated.
+    """
     for tx in transactions:
         if tx.signature == COINBASE_SIGNATURE:
-            wallets.credit(wallet_id=tx.receiver_wallet_id, amount=tx.amount)
-        else:
+            if tx.receiver_wallet_id:
+                wallets.credit(wallet_id=tx.receiver_wallet_id, amount=tx.amount)
+        elif tx.sender_wallet_id and tx.receiver_wallet_id:
             wallets.apply_transfer(
                 sender_wallet_id=tx.sender_wallet_id,
                 receiver_wallet_id=tx.receiver_wallet_id,
                 amount=tx.amount,
             )
+        # else: legacy transaction without wallet IDs — chain records it
+        # for history but no balance change.

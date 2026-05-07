@@ -13,6 +13,7 @@ from api.auth_middleware import install_auth_middleware
 from api.auth_routes import build_auth_blueprint
 from api.errors import bad_request, register_error_handlers
 from api.permissions import set_permission_resolver
+from api.wallet_routes import build_wallet_blueprint
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
@@ -30,10 +31,12 @@ from config import (
 )
 from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService, PropagationService
 from domain.user_repository import InMemoryUserStore, UserRepositoryProtocol
+from domain.wallet_repository import InMemoryWalletStore, WalletRepositoryProtocol
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
 from infrastructure.postgres_node_registry import PostgresNodeRegistry
 from infrastructure.postgres_repository import PostgresBlockRepository
 from infrastructure.postgres_user_store import PostgresUserStore
+from infrastructure.postgres_wallet_store import PostgresWalletStore
 
 
 def _legacy_home_payload() -> dict[str, object]:
@@ -66,6 +69,10 @@ def _v1_home_payload() -> dict[str, object]:
             "admin_unban": "/api/v1/admin/users/<id>/unban",
             "admin_permissions": "/api/v1/admin/users/<id>/permissions",
             "admin_audit": "/api/v1/admin/audit",
+            "admin_mint": "/api/v1/admin/mint",
+            "wallets_create": "/api/v1/wallets",
+            "wallets_me": "/api/v1/wallets/me",
+            "transactions_signed": "/api/v1/transactions/signed",
             "health": "/api/v1/health",
             "metrics": "/api/v1/metrics",
             "nodes_register": "/api/v1/nodes/register",
@@ -127,18 +134,25 @@ def create_app(
     propagation: PropagationService | None = None,
     ws_hub: WebSocketHub | None = None,
     users: UserRepositoryProtocol | None = None,
+    wallets: WalletRepositoryProtocol | None = None,
 ) -> Quart:
     app = Quart(__name__)
     if dsn:
+        wallet_store: WalletRepositoryProtocol = wallets or PostgresWalletStore(dsn)
         chain_service = blockchain or BlockchainService(
             repository=PostgresBlockRepository(dsn),
             difficulty_prefix=DIFFICULTY_PREFIX,
+            wallet_repo=wallet_store,
         )
         pool = mempool or MempoolService(repository=PostgresMempoolRepository(dsn))
         registry = node_registry or PostgresNodeRegistry(dsn)
         user_store: UserRepositoryProtocol = users or PostgresUserStore(dsn)
     else:
-        chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
+        wallet_store = wallets or InMemoryWalletStore()
+        chain_service = blockchain or BlockchainService(
+            difficulty_prefix=DIFFICULTY_PREFIX,
+            wallet_repo=wallet_store,
+        )
         pool = mempool or MempoolService()
         registry = node_registry or InMemoryNodeRegistry()
         user_store = users or InMemoryUserStore()
@@ -173,7 +187,7 @@ def create_app(
     @api_v1.route("/mine_block", methods=["POST"])
     @rate_limit(max_calls=5, period_seconds=60)
     async def v1_mine_block():
-        result = _mine(chain_service, pool)
+        result = _mine(chain_service, pool, wallet_repo=wallet_store)
         hub.broadcast({"event": "block_mined", "block": result})
         propagator.notify_resolve()
         return jsonify(result), 200
@@ -275,7 +289,7 @@ def create_app(
 
     @app.route("/mine_block", methods=["GET"])
     async def legacy_mine_block():
-        return jsonify(_mine(chain_service, pool)), 200
+        return jsonify(_mine(chain_service, pool, wallet_repo=wallet_store)), 200
 
     @app.route("/get_chain", methods=["GET"])
     async def legacy_get_chain():
@@ -312,6 +326,13 @@ def create_app(
     )
     admin_bp = build_admin_blueprint(users=user_store)
     api_v1.register_blueprint(admin_bp)
+
+    # Phase I.3: wallet endpoints (create, list-mine, signed transfer,
+    # admin mint). Each route is gated by `@require_permission(...)`.
+    wallet_bp = build_wallet_blueprint(
+        wallets=wallet_store, users=user_store, mempool=pool
+    )
+    api_v1.register_blueprint(wallet_bp)
 
     app.register_blueprint(api_v1)
     register_error_handlers(app)
