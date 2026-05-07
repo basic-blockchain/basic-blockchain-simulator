@@ -9,9 +9,13 @@ the existing repos in this package (`PostgresBlockRepository`, etc.).
 
 from __future__ import annotations
 
+import json
+
 import psycopg2
 from psycopg2 import errorcodes
+from psycopg2.extras import Json
 
+from domain.audit import AuditEntry
 from domain.user_repository import (
     CredentialsRecord,
     EmailTakenError,
@@ -56,19 +60,13 @@ class PostgresUserStore:
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, username, display_name, email FROM users WHERE user_id = %s",
-                (user_id,),
-            )
+            cur.execute(_USER_SELECT + " WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
         return _row_to_user(row)
 
     def get_user_by_username(self, username: str) -> UserRecord | None:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, username, display_name, email FROM users WHERE username = %s",
-                (username,),
-            )
+            cur.execute(_USER_SELECT + " WHERE username = %s", (username,))
             row = cur.fetchone()
         return _row_to_user(row)
 
@@ -77,6 +75,19 @@ class PostgresUserStore:
             cur.execute("SELECT COUNT(*) FROM users")
             row = cur.fetchone()
         return int(row[0]) if row else 0
+
+    def list_users(self) -> list[UserRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(_USER_SELECT + " ORDER BY username")
+            rows = cur.fetchall()
+        return [_row_to_user(row) for row in rows if _row_to_user(row) is not None]  # type: ignore[misc]
+
+    def set_banned(self, *, user_id: str, banned: bool) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET banned = %s, updated_at = now() WHERE user_id = %s",
+                (banned, user_id),
+            )
 
     # ── Credentials ───────────────────────────────────────────────────
 
@@ -137,6 +148,13 @@ class PostgresUserStore:
                 (user_id, role),
             )
 
+    def revoke_role(self, *, user_id: str, role: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_roles WHERE user_id = %s AND role = %s",
+                (user_id, role),
+            )
+
     def get_roles(self, user_id: str) -> list[str]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
@@ -144,6 +162,81 @@ class PostgresUserStore:
                 (user_id,),
             )
             return [row[0] for row in cur.fetchall()]
+
+    # ── Permission overrides (Phase I.2) ──────────────────────────
+
+    def get_role_overrides(self) -> dict[str, set[str]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT role, permission_id FROM role_permissions")
+            overrides: dict[str, set[str]] = {}
+            for role, perm in cur.fetchall():
+                overrides.setdefault(role, set()).add(perm)
+        return overrides
+
+    def get_user_overrides(self, user_id: str) -> set[str]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT permission_id FROM user_permissions WHERE user_id = %s",
+                (user_id,),
+            )
+            return {row[0] for row in cur.fetchall()}
+
+    def grant_user_permission(self, *, user_id: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_permissions (user_id, permission_id) "
+                "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, permission),
+            )
+
+    def revoke_user_permission(self, *, user_id: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_permissions WHERE user_id = %s AND permission_id = %s",
+                (user_id, permission),
+            )
+
+    # ── Audit log (Phase I.2) ─────────────────────────────────────
+
+    def append_audit(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        target_id: str | None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO audit_log (actor_id, action, target_id, details) "
+                "VALUES (%s, %s, %s, %s)",
+                (actor_id, action, target_id, Json(details or {})),
+            )
+
+    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, actor_id, action, target_id, details, created_at "
+                "FROM audit_log ORDER BY id DESC LIMIT %s",
+                (limit,),
+            )
+            rows = cur.fetchall()
+        return [
+            AuditEntry(
+                id=int(row[0]),
+                actor_id=row[1],
+                action=row[2],
+                target_id=row[3],
+                details=row[4] if isinstance(row[4], dict) else json.loads(row[4]),
+                created_at=str(row[5]),
+            )
+            for row in rows
+        ]
+
+
+_USER_SELECT = (
+    "SELECT user_id, username, display_name, email, banned FROM users"
+)
 
 
 def _row_to_user(row: tuple | None) -> UserRecord | None:
@@ -154,4 +247,5 @@ def _row_to_user(row: tuple | None) -> UserRecord | None:
         username=row[1],
         display_name=row[2],
         email=row[3],
+        banned=bool(row[4]) if len(row) > 4 else False,
     )
