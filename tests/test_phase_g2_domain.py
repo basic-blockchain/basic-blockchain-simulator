@@ -55,6 +55,7 @@ def test_is_valid_chain_accepts_valid_remote_chain():
 
 
 def test_is_valid_chain_rejects_tampered_hash():
+    from domain.blockchain import EMPTY_MERKLE_ROOT
     from domain.models import Block
     svc = BlockchainService(difficulty_prefix="0")
     blocks = svc._repo.get_all()
@@ -63,11 +64,13 @@ def test_is_valid_chain_rejects_tampered_hash():
         timestamp=blocks[0].timestamp,
         proof=blocks[0].proof,
         previous_hash="tampered",
+        merkle_root=EMPTY_MERKLE_ROOT,
     )
     assert svc.is_valid_chain([bad]) is True  # single block always passes (no predecessor)
 
 
 def test_is_valid_chain_rejects_broken_link():
+    from domain.blockchain import EMPTY_MERKLE_ROOT
     from domain.models import Block
     svc = BlockchainService(difficulty_prefix="0")
     prev = svc.previous_block()
@@ -80,6 +83,7 @@ def test_is_valid_chain_rejects_broken_link():
         timestamp=blocks[1].timestamp,
         proof=blocks[1].proof,
         previous_hash="broken",
+        merkle_root=EMPTY_MERKLE_ROOT,
     )
     assert svc.is_valid_chain(blocks) is False
 
