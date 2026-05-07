@@ -37,6 +37,100 @@ the response; check server logs for correlation.
 
 ---
 
+## Authentication (Phase I.1, v0.11.0)
+
+The simulator issues Bearer JWTs (HS256, default 30-minute TTL). Most write
+endpoints will require the header `Authorization: Bearer <jwt>` once Phase
+I.2 / I.3 land; for v0.11.0 the auth surface is the four endpoints below
+plus a permissive middleware that decodes the token if present and
+attaches a `current_user` to the request context.
+
+The following error codes are specific to the auth flow:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Bad / missing JSON fields |
+| 400 | `USERNAME_TAKEN` / `EMAIL_TAKEN` | Duplicate identity at register |
+| 400 | `AUTH_INVALID_ACTIVATION` | Wrong username / activation code pair |
+| 400 | `AUTH_INVALID_CREDENTIALS` | Login: missing user, wrong password, or not yet activated. **Single code on purpose** to avoid account enumeration. |
+| 401 | `AUTH_REQUIRED` | Protected route reached without a token |
+| 401 | `AUTH_INVALID_TOKEN` | Malformed / forged / wrong-signature token |
+| 401 | `AUTH_EXPIRED_TOKEN` | Token's `exp` is in the past |
+| 401 | `AUTH_USER_NOT_FOUND` | `/me` resolves a user_id no longer in DB |
+
+### POST /api/v1/auth/register
+
+**Request body**
+```json
+{ "username": "alice", "display_name": "Alice", "email": "alice@example.com" }
+```
+
+`display_name` defaults to `username` when omitted. `email` is optional.
+
+**Response 201**
+```json
+{
+  "message": "User registered. Use the activation code to set your password.",
+  "user_id": "b4ff…d7",
+  "username": "alice",
+  "activation_code": "8VKQ2YQ7B3HXCZNT"
+}
+```
+
+The activation code is shown **only on this response**. The new account
+has no password until `POST /auth/activate` is called.
+
+### POST /api/v1/auth/activate
+
+**Request body**
+```json
+{ "username": "alice", "activation_code": "8VKQ2YQ7B3HXCZNT", "password": "hunter12345" }
+```
+
+Password must be at least 8 characters. The code is consumed (set to
+`NULL`) and `activated_at` stamped to `now()`.
+
+**Response 200**
+```json
+{ "message": "Account activated. You can now log in.", "user_id": "b4ff…d7" }
+```
+
+### POST /api/v1/auth/login
+
+**Request body**
+```json
+{ "username": "alice", "password": "hunter12345" }
+```
+
+**Response 200**
+```json
+{
+  "access_token": "eyJhbGciOi…",
+  "token_type": "Bearer",
+  "expires_in": 1800,
+  "user_id": "b4ff…d7",
+  "username": "alice",
+  "roles": ["VIEWER"]
+}
+```
+
+### GET /api/v1/auth/me
+
+Requires `Authorization: Bearer <jwt>`.
+
+**Response 200**
+```json
+{
+  "user_id": "b4ff…d7",
+  "username": "alice",
+  "display_name": "Alice",
+  "email": "alice@example.com",
+  "roles": ["VIEWER"]
+}
+```
+
+---
+
 ## Endpoints
 
 ### GET /api/v1/
