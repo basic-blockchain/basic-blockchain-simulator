@@ -38,6 +38,8 @@ comments and test cases.
 | BR-BL-08 | Mining is rate-limited to **5 requests per 60 seconds** per process (sliding-window). Excess requests receive HTTP 429 with `Retry-After`. | `api/rate_limit.py` · `basic-blockchain.py` |
 | BR-BL-09 | After a block is mined, all registered peers receive a `GET /api/v1/nodes/resolve` trigger (concurrent, fire-and-forget). | `domain/propagation.py` (`notify_resolve`) |
 | BR-BL-10 | After a block is mined, all connected WebSocket clients receive `{"event": "block_mined", "block": {...}}`. | `api/websocket_hub.py` · `basic-blockchain.py` |
+| BR-BL-11 | Each block carries a `merkle_root` (SHA-256 binary Merkle tree, Bitcoin-style odd-level duplication) computed over its `transactions` list at mining time. Empty blocks use `EMPTY_MERKLE_ROOT = sha256("").hexdigest()`. *(v0.10.0)* | `domain/blockchain.py` (`_compute_merkle_root`, `create_block`) |
+| BR-BL-12 | A block's transactions are persisted in the same DB transaction that writes the block row, so a Merkle root never references rows that are missing from the `transactions` table. *(v0.10.0)* | `infrastructure/postgres_repository.py` (`append`) |
 
 ---
 
@@ -45,8 +47,9 @@ comments and test cases.
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
-| BR-CH-01 | The chain is valid if and only if every block satisfies BR-BL-04 and BR-BL-06. | `domain/blockchain.py` (`is_chain_valid`) |
-| BR-CH-02 | Tampering with any block (changing proof, previous_hash, or index) invalidates the chain from that block onward. | `domain/blockchain.py` (`is_chain_valid`) |
+| BR-CH-01 | The chain is valid if and only if every block satisfies BR-BL-04, BR-BL-06, and BR-CH-05. | `domain/blockchain.py` (`is_chain_valid`) |
+| BR-CH-02 | Tampering with any block (changing proof, previous_hash, index, merkle_root, or any of its transactions) invalidates the chain. | `domain/blockchain.py` (`is_chain_valid`) |
+| BR-CH-05 | Every block's stored `merkle_root` must equal the Merkle root recomputed from its `transactions` list; the chain hash also covers `merkle_root`, so a mutated transaction or a re-stamped Merkle root both fail validation. *(v0.10.0)* | `domain/blockchain.py` (`_validate_blocks`) |
 | BR-CH-03 | Chain replacement (consensus) is accepted only when the remote chain is strictly longer AND passes full validity checks. | `domain/consensus.py` (`resolve`) |
 | BR-CH-04 | The average mining time is computed only when the chain contains at least 2 blocks. With only the genesis block, `avg_mine_time_seconds` is `null`. | `domain/blockchain.py` (`avg_mine_time_seconds`) |
 

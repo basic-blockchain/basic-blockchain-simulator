@@ -56,20 +56,27 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
     previous_proof = previous_block.proof
     proof = blockchain.proof_of_work(previous_proof)
     previous_hash = blockchain.hash_block(previous_block)
-    block = blockchain.create_block(proof, previous_hash)
+    # Flush mempool BEFORE creating the block so the block can be stamped with
+    # its actual transactions and Merkle root. `create_block` (via the repo's
+    # `append`) persists block + transactions atomically — no separate
+    # save_confirmed_transactions call needed.
     included = mempool.flush()
-    blockchain.save_confirmed_transactions(block.index, included)
+    block = blockchain.create_block(proof, previous_hash, transactions=included)
     included_dicts = [tx.to_dict() for tx in included]
     logger.info(
         "block_mined",
         extra={"data": {"index": block.index, "proof": block.proof, "tx_count": len(included_dicts)}},
     )
+    # The top-level `transactions` field is kept for back-compat with v0.9.0
+    # clients; the same list is also nested under each block (via to_dict)
+    # whenever blocks are returned by /chain or block detail.
     return {
         "message": "A block is MINED",
         "index": block.index,
         "timestamp": block.timestamp,
         "proof": block.proof,
         "previous_hash": block.previous_hash,
+        "merkle_root": block.merkle_root,
         "transactions": included_dicts,
     }
 
