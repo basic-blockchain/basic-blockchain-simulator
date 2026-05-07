@@ -8,17 +8,30 @@ load_dotenv()
 
 from quart import Blueprint, Quart, g, jsonify, request
 
+from api.auth_middleware import install_auth_middleware
+from api.auth_routes import build_auth_blueprint
 from api.errors import bad_request, register_error_handlers
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
 from api.schemas import parse_transaction
 from api.websocket_hub import WebSocketHub
-from config import DATABASE_URL, DIFFICULTY_PREFIX
+from config import (
+    BCRYPT_ROUNDS,
+    BOOTSTRAP_ADMIN_USERNAME,
+    DATABASE_URL,
+    DIFFICULTY_PREFIX,
+    JWT_ALGORITHM,
+    JWT_SECRET,
+    JWT_TTL_SECONDS,
+    TESTING,
+)
 from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService, PropagationService
+from domain.user_repository import InMemoryUserStore, UserRepositoryProtocol
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
 from infrastructure.postgres_node_registry import PostgresNodeRegistry
 from infrastructure.postgres_repository import PostgresBlockRepository
+from infrastructure.postgres_user_store import PostgresUserStore
 
 
 def _legacy_home_payload() -> dict[str, object]:
@@ -41,6 +54,10 @@ def _v1_home_payload() -> dict[str, object]:
             "valid": "/api/v1/valid",
             "transactions": "/api/v1/transactions",
             "pending": "/api/v1/transactions/pending",
+            "auth_register": "/api/v1/auth/register",
+            "auth_activate": "/api/v1/auth/activate",
+            "auth_login": "/api/v1/auth/login",
+            "auth_me": "/api/v1/auth/me",
             "health": "/api/v1/health",
             "metrics": "/api/v1/metrics",
             "nodes_register": "/api/v1/nodes/register",
@@ -88,6 +105,7 @@ def create_app(
     node_registry=None,
     propagation: PropagationService | None = None,
     ws_hub: WebSocketHub | None = None,
+    users: UserRepositoryProtocol | None = None,
 ) -> Quart:
     app = Quart(__name__)
     if dsn:
@@ -97,14 +115,25 @@ def create_app(
         )
         pool = mempool or MempoolService(repository=PostgresMempoolRepository(dsn))
         registry = node_registry or PostgresNodeRegistry(dsn)
+        user_store: UserRepositoryProtocol = users or PostgresUserStore(dsn)
     else:
         chain_service = blockchain or BlockchainService(difficulty_prefix=DIFFICULTY_PREFIX)
         pool = mempool or MempoolService()
         registry = node_registry or InMemoryNodeRegistry()
+        user_store = users or InMemoryUserStore()
 
     consensus = ConsensusService(blockchain=chain_service, registry=registry)
     propagator = propagation or PropagationService(registry=registry)
     hub = ws_hub or WebSocketHub()
+
+    # Phase I.1: install JWT middleware. The middleware no-ops on PUBLIC_PATHS
+    # and rejects malformed/expired tokens with 401 before the route runs.
+    if not JWT_SECRET and not TESTING:
+        raise RuntimeError(
+            "JWT_SECRET is required outside TESTING mode. "
+            "Set it in the environment before starting the simulator."
+        )
+    install_auth_middleware(app, secret=JWT_SECRET, algorithm=JWT_ALGORITHM)
 
     @app.before_request
     async def _assign_request_id():
@@ -239,6 +268,18 @@ def create_app(
             "The Blockchain is valid." if is_valid else "The Blockchain is not valid."
         )
         return jsonify({"message": message}), 200
+
+    # Phase I.1: nest the auth blueprint under /api/v1 so its routes resolve
+    # to /api/v1/auth/register, /api/v1/auth/login, etc.
+    auth_bp = build_auth_blueprint(
+        users=user_store,
+        jwt_secret=JWT_SECRET,
+        jwt_algorithm=JWT_ALGORITHM,
+        jwt_ttl_seconds=JWT_TTL_SECONDS,
+        bcrypt_rounds=BCRYPT_ROUNDS,
+        bootstrap_admin_username=BOOTSTRAP_ADMIN_USERNAME,
+    )
+    api_v1.register_blueprint(auth_bp)
 
     app.register_blueprint(api_v1)
     register_error_handlers(app)
