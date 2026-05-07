@@ -50,6 +50,20 @@ comments and test cases.
 | BR-CH-01 | The chain is valid if and only if every block satisfies BR-BL-04, BR-BL-06, and BR-CH-05. | `domain/blockchain.py` (`is_chain_valid`) |
 | BR-CH-02 | Tampering with any block (changing proof, previous_hash, index, merkle_root, or any of its transactions) invalidates the chain. | `domain/blockchain.py` (`is_chain_valid`) |
 | BR-CH-05 | Every block's stored `merkle_root` must equal the Merkle root recomputed from its `transactions` list; the chain hash also covers `merkle_root`, so a mutated transaction or a re-stamped Merkle root both fail validation. *(v0.10.0)* | `domain/blockchain.py` (`_validate_blocks`) |
+
+---
+
+## 5. Authentication & Identity Rules *(Phase I.1, v0.11.0)*
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-AU-01 | `users.username` is unique and 1..64 characters; `users.user_id` is a server-generated 32-hex string used as the JWT `sub` claim. | `migrations/V007` · `api/auth_routes.py` (`register`) |
+| BR-AU-02 | A newly registered user has `password_hash = ''` and an `activation_code`; login is denied until `POST /auth/activate` consumes the code and sets a bcrypt hash. Passwords must be at least 8 characters. | `api/auth_routes.py` (`register`, `activate`) |
+| BR-AU-03 | Login uniformly returns HTTP 400 with `code: AUTH_INVALID_CREDENTIALS` for missing user, wrong password, AND not-yet-activated account, to prevent account enumeration. | `api/auth_routes.py` (`login`) |
+| BR-AU-04 | The first registered user whose username matches `BOOTSTRAP_ADMIN_USERNAME` (env var) is auto-promoted to `ADMIN`. Every other registration receives the default role `VIEWER`. The promotion only triggers when `users` is empty — later same-username registrations get the default role. | `api/auth_routes.py` (`register`) |
+| BR-AU-05 | JWTs are HS256 with a `{sub, roles, iat, exp}` payload and a configurable TTL (`JWT_TTL_SECONDS`, default 1800). Tampered tokens fail with HTTP 401 / `AUTH_INVALID_TOKEN`; expired tokens fail with HTTP 401 / `AUTH_EXPIRED_TOKEN`. | `domain/auth.py` (`create_jwt`/`decode_jwt`) · `api/auth_middleware.py` |
+| BR-AU-06 | The simulator refuses to start when `JWT_SECRET` is empty unless `TESTING=true` is set. The test suite uses a deterministic 38-byte sentinel so unit tests are reproducible without environment coupling. | `config.py` · `basic-blockchain.py` (`create_app`) |
+| BR-AU-07 | The middleware never persists the decoded token; it lives only on `g.current_user` for the duration of the request. Public endpoints (`/`, `/health`, `/chain`, `/valid`, `/auth/*`, legacy `/get_chain`/`/valid`) reach the route with `g.current_user = None`. | `api/auth_middleware.py` (`PUBLIC_PATHS`) |
 | BR-CH-03 | Chain replacement (consensus) is accepted only when the remote chain is strictly longer AND passes full validity checks. | `domain/consensus.py` (`resolve`) |
 | BR-CH-04 | The average mining time is computed only when the chain contains at least 2 blocks. With only the genesis block, `avg_mine_time_seconds` is `null`. | `domain/blockchain.py` (`avg_mine_time_seconds`) |
 
