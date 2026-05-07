@@ -1,13 +1,13 @@
 # Blockchain Simulator
 
-![Version](https://img.shields.io/badge/version-v0.9.0-blue)
+![Version](https://img.shields.io/badge/version-v0.10.0-blue)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-96%20passed-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-86%25-green)
+![Tests](https://img.shields.io/badge/tests-107%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-83%25-green)
 
-**Latest stable release:** v0.9.0
+**Latest stable release:** v0.10.0
 
-Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, query confirmed transaction history, validate chain integrity, synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
+Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, query confirmed transaction history, validate chain integrity (now including a per-block Merkle root over the embedded transactions), synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
 
 ---
 
@@ -161,6 +161,7 @@ Coverage gate: **80%** (enforced in CI).
 
 - **Genesis block** — Created automatically on first init; not re-created on restart when using PostgreSQL.
 - **Proof of Work** — SHA-256 hash of `(proof² - prev_proof²)` must start with `DIFFICULTY_PREFIX` (default `00000`).
+- **Merkle root** — Each block carries a `merkle_root` over its transactions (binary sha256 tree, Bitcoin-style odd-level duplication). The chain hash covers `merkle_root`, so any post-hoc edit to a confirmed transaction makes `is_chain_valid()` return `False`. Empty blocks use `EMPTY_MERKLE_ROOT = sha256("").hexdigest()`.
 - **Repository pattern** — `BlockRepositoryProtocol` and `MempoolRepositoryProtocol` decouple domain logic from storage; swap in-memory ↔ PostgreSQL without touching service code.
 - **Structured logging** — Every event emits JSON `{ts, level, event, request_id, data}`; `request_id` is taken from the `X-Request-ID` header or auto-generated per request.
 - **WebSocket push** — Connected clients receive `{"event": "block_mined", "block": {...}}` the moment a block is mined, without polling. Connect to `ws://localhost:5000/api/v1/ws`.
