@@ -126,6 +126,32 @@ erDiagram
         timestamptz  granted_at
     }
 
+    permissions {
+        varchar     permission_id    PK  "e.g. MINT, BAN_USER; seeded by V009"
+        varchar     description
+    }
+
+    role_permissions {
+        user_role   role             "PK part 1"
+        varchar     permission_id    "PK part 2, FK to permissions"
+        timestamptz granted_at
+    }
+
+    user_permissions {
+        varchar     user_id          "PK part 1, FK to users ON DELETE CASCADE"
+        varchar     permission_id    "PK part 2, FK to permissions"
+        timestamptz granted_at
+    }
+
+    audit_log {
+        bigserial    id          PK
+        varchar      actor_id        "user_id of the admin who performed the action"
+        varchar      action          "USER_BANNED, ROLE_GRANTED, PERMISSION_GRANTED, …"
+        varchar      target_id       "subject of the action; nullable"
+        jsonb        details         "action-specific payload"
+        timestamptz  created_at
+    }
+
     schema_migrations {
         text        version     PK  "e.g. V001"
         timestamptz applied_at

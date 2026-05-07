@@ -131,6 +131,88 @@ Requires `Authorization: Bearer <jwt>`.
 
 ---
 
+## Admin endpoints (Phase I.2, v0.12.0)
+
+All admin routes require an authenticated user holding the right
+permission. Failures return:
+
+| HTTP | Code | When |
+|------|------|------|
+| 401 | `AUTH_REQUIRED` | No bearer token on the request |
+| 403 | `FORBIDDEN` | Token is valid but the user lacks the gating permission |
+| 400 | `USER_NOT_FOUND` | The path `<id>` does not exist |
+| 400 | `SELF_ACTION_FORBIDDEN` | An admin attempts to ban / demote themselves |
+| 400 | `VALIDATION_ERROR` | Body shape, unknown role, unknown permission, etc. |
+
+ADMIN's hardcoded baseline (in `domain/permissions.py`) covers **only**
+the user-management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`,
+`BAN_USER`, `UNBAN_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`,
+`VIEW_AUDIT_LOG`) plus their own wallet ops (`CREATE_WALLET`,
+`TRANSFER`). Financial-action and cross-user data permissions
+(`MINT`, `FREEZE_WALLET`, `UNFREEZE_WALLET`, `VIEW_WALLETS`,
+`VIEW_TRANSFERS`) are **not** in the baseline — even an ADMIN must
+self-grant them through `POST /admin/users/<self>/permissions` (the
+grant is audited).
+
+### GET /api/v1/admin/users  *(permission VIEW_USERS)*
+
+```json
+{
+  "users": [
+    { "user_id": "…", "username": "alice", "display_name": "Alice",
+      "email": "alice@…", "banned": false, "roles": ["ADMIN"] }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/v1/admin/users/<id>/roles  *(permission ASSIGN_ROLE)*
+
+```json
+{ "action": "grant", "role": "OPERATOR" }    // or "revoke"
+```
+
+Response: `{ "user_id", "roles": ["…"], "action": "ROLE_GRANTED" }`.
+
+### POST /api/v1/admin/users/<id>/ban  *(permission BAN_USER)*
+
+Body: empty. Self-ban is rejected with `SELF_ACTION_FORBIDDEN`.
+
+A banned user cannot log in — login returns the uniform
+`AUTH_INVALID_CREDENTIALS` (no enumeration leak). Existing JWTs
+remain valid until they expire; revoke-on-ban is out of scope
+for v0.12.0.
+
+### POST /api/v1/admin/users/<id>/unban  *(permission UNBAN_USER)*
+
+Body: empty. Returns `{ "user_id", "banned": false }`.
+
+### POST /api/v1/admin/users/<id>/permissions  *(permission MANAGE_PERMISSIONS)*
+
+```json
+{ "action": "grant", "permission": "VIEW_WALLETS" }
+```
+
+Response lists the user's full set of direct grants:
+`{ "user_id", "permissions": ["VIEW_WALLETS"], "action": "PERMISSION_GRANTED" }`.
+
+### GET /api/v1/admin/audit  *(permission VIEW_AUDIT_LOG)*
+
+Returns the most recent admin audit entries (newest first). Optional
+`?limit=N` (default 50, capped at 200).
+
+```json
+{
+  "entries": [
+    { "id": 12, "actor_id": "…", "action": "USER_BANNED",
+      "target_id": "…", "details": {}, "created_at": "2026-05-07 …" }
+  ],
+  "count": 1
+}
+```
+
+---
+
 ## Endpoints
 
 ### GET /api/v1/
