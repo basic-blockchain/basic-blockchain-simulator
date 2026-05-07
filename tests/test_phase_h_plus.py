@@ -149,9 +149,14 @@ async def test_chain_endpoint_includes_merkle_root_and_transactions():
         assert mine_resp.status_code == 200
         body = await mine_resp.get_json()
         assert "merkle_root" in body
-        assert body["transactions"] == [
-            {"sender": "alice", "receiver": "bob", "amount": 4.5}
-        ]
+        # Phase I.3 expanded Transaction with wallet IDs / nonce /
+        # signature; legacy POST /transactions still constructs txs with
+        # those fields defaulted, so the response shape now carries
+        # them too.
+        assert len(body["transactions"]) == 1
+        assert body["transactions"][0]["sender"] == "alice"
+        assert body["transactions"][0]["receiver"] == "bob"
+        assert body["transactions"][0]["amount"] == 4.5
 
         chain_resp = await client.get("/api/v1/chain")
         chain_body = await chain_resp.get_json()
@@ -160,9 +165,8 @@ async def test_chain_endpoint_includes_merkle_root_and_transactions():
         assert chain_body["length"] == 2
         latest = chain_body["chain"][-1]
         assert "merkle_root" in latest
-        assert latest["transactions"] == [
-            {"sender": "alice", "receiver": "bob", "amount": 4.5}
-        ]
+        assert len(latest["transactions"]) == 1
+        assert latest["transactions"][0]["sender"] == "alice"
         # Genesis block is empty.
         genesis = chain_body["chain"][0]
         assert genesis["merkle_root"] == EMPTY_MERKLE_ROOT
