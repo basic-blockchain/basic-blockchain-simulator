@@ -13,7 +13,12 @@ TESTING: bool = os.environ.get("TESTING", "").lower() in {"1", "true", "yes"}
 # JWT_SECRET MUST be set in any non-testing environment. The default below is
 # only used when TESTING=true so unit tests can run without env coupling — it
 # is rejected at startup otherwise.
-JWT_SECRET: str = os.environ.get("JWT_SECRET", "" if not TESTING else "test-secret-not-for-production")
+# PyJWT warns when the HS256 secret is shorter than 32 bytes; pad the test
+# sentinel above the threshold so test runs are warning-free.
+JWT_SECRET: str = os.environ.get(
+    "JWT_SECRET",
+    "" if not TESTING else "test-secret-not-for-production-padding",
+)
 JWT_ALGORITHM: str = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_TTL_SECONDS: int = int(os.environ.get("JWT_TTL_SECONDS", "1800"))
 
