@@ -4,6 +4,11 @@ import os
 import subprocess
 import sys
 
+# Phase I.1: opt the test process into TESTING mode before any project module
+# imports `config.py`, so JWT_SECRET picks up the deterministic test sentinel
+# instead of raising "JWT_SECRET is required outside TESTING mode".
+os.environ.setdefault("TESTING", "true")
+
 import psycopg2
 import pytest
 
