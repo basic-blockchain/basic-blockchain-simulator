@@ -80,9 +80,10 @@ def test_blockchain_service_returns_confirmed_transactions_in_memory():
     pool.add(Transaction(sender="x", receiver="y", amount=1.0))
     prev = chain.previous_block()
     proof = chain.proof_of_work(prev.proof)
-    block = chain.create_block(proof=proof, previous_hash=chain.hash_block(prev))
     txs = pool.flush()
-    chain.save_confirmed_transactions(block.index, txs)
+    block = chain.create_block(
+        proof=proof, previous_hash=chain.hash_block(prev), transactions=txs
+    )
 
     confirmed = chain.confirmed_transactions()
     assert len(confirmed) == 1
@@ -110,9 +111,10 @@ def test_postgres_repository_returns_confirmed_transactions(clean_db):
     pool.add(Transaction(sender="carol", receiver="dave", amount=2.5))
     prev = chain.previous_block()
     proof = chain.proof_of_work(prev.proof)
-    block = chain.create_block(proof=proof, previous_hash=chain.hash_block(prev))
     txs = pool.flush()
-    chain.save_confirmed_transactions(block.index, txs)
+    block = chain.create_block(
+        proof=proof, previous_hash=chain.hash_block(prev), transactions=txs
+    )
 
     fresh_repo = PostgresBlockRepository(clean_db)
     confirmed = fresh_repo.get_confirmed_transactions()

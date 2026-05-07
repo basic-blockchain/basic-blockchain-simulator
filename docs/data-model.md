@@ -7,12 +7,20 @@
 ```python
 @dataclass
 class Block:
-    index:         int   # 1-based chain position; auto-incremented
-    timestamp:     str   # ISO-8601 datetime (UTC)
-    proof:         int   # Proof-of-Work result satisfying difficulty constraint
-    previous_hash: str   # SHA-256 hash of the preceding block (hex string)
-                         # Genesis block uses "0" as sentinel value
+    index:         int               # 1-based chain position; auto-incremented
+    timestamp:     str               # ISO-8601 datetime (UTC)
+    proof:         int               # Proof-of-Work result satisfying difficulty
+    previous_hash: str               # SHA-256 hash of the preceding block (hex)
+                                     # Genesis uses "0" as sentinel
+    merkle_root:   str               # SHA-256 Merkle root over `transactions`
+                                     # Empty list -> sha256("").hexdigest()
+    transactions:  list[Transaction] # Confirmed in this block; hydrated at
+                                     # read time from the `transactions` table
 ```
+
+`merkle_root` and `transactions` were added in v0.10.0 (Phase H+). The
+chain hash covers `merkle_root`, so any post-hoc edit to a confirmed
+transaction makes `is_chain_valid()` return `False`.
 
 ### Transaction
 
@@ -36,6 +44,7 @@ erDiagram
         text        timestamp
         integer     proof
         text        previous_hash
+        text        merkle_root         "NOT NULL — sha256 Merkle root over the block's transactions; introduced in V006 (Phase H+)"
         timestamptz created_at
     }
 

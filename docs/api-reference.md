@@ -82,11 +82,16 @@ Mines a new block using Proof-of-Work. Flushes the mempool into the block.
   "timestamp":     "2026-04-23T21:12:44.123456",
   "proof":         84530,
   "previous_hash": "00000a3f...",
+  "merkle_root":   "abcdef...",
   "transactions": [
     { "sender": "alice", "receiver": "bob", "amount": 10.5 }
   ]
 }
 ```
+
+The `transactions` field is also available **nested under each block** in
+`GET /api/v1/chain` responses (since v0.10.0). Keeping it at the top level
+of the mining response preserves back-compatibility with v0.9.0 clients.
 
 **Response 429**
 ```json
@@ -116,24 +121,38 @@ Returns the full blockchain.
       "index":         1,
       "timestamp":     "2026-04-23T20:00:00.000000",
       "proof":         1,
-      "previous_hash": "0"
+      "previous_hash": "0",
+      "merkle_root":   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "transactions":  []
     },
     {
       "index":         2,
       "timestamp":     "2026-04-23T20:01:10.123456",
       "proof":         84530,
-      "previous_hash": "00000a3f..."
+      "previous_hash": "00000a3f...",
+      "merkle_root":   "abcdef...",
+      "transactions": [
+        { "sender": "alice", "receiver": "bob", "amount": 10.5 }
+      ]
     }
   ],
   "length": 2
 }
 ```
 
+Since v0.10.0 each block carries `merkle_root` plus its `transactions` list.
+Empty blocks use `merkle_root = sha256("").hexdigest()` (the constant
+`EMPTY_MERKLE_ROOT` exported from `domain.blockchain`).
+
 ---
 
 ### GET /api/v1/valid
 
-Validates the chain's proof-of-work linkage and hash chain integrity.
+Validates the chain's proof-of-work linkage, hash chain integrity, **and**
+(since v0.10.0) the Merkle root stamped on each block versus the
+transactions actually present in the `transactions` table. Mutating a
+confirmed transaction's amount, sender, or receiver after the fact will
+flip this endpoint's `valid` to `false` until the chain is repaired.
 
 **Response 200**
 ```json
