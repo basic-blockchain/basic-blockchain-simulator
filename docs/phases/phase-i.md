@@ -13,11 +13,12 @@ Convert the simulator from a free-for-all transaction endpoint into a usable wal
 | # | Decision | Outcome |
 |---|----------|---------|
 | 1 | Tenancy | **Multi-user, single-org.** One shared chain, many users with their wallets. No `tenant_id` column anywhere. |
-| 2 | Transfer authorisation | **JWT for identity + per-wallet 12-char `auth_token` with nonce.** JWT proves *who* you are; the wallet token (TTL 5min) proves *intent + freshness* and prevents replay if the JWT leaks. Mirrors the pattern in `blockchain-data-model`. |
+| 2 | Transfer authorisation | **JWT for identity + ECDSA secp256k1 signature derived from a BIP-39 mnemonic, with monotonic nonce.** Each wallet is created with a 12-word BIP-39 mnemonic; the private key is derived from it and never persisted server-side. The server stores only `wallets.public_key`. Each transfer carries a signature over `(sender_wallet_id, receiver_wallet_id, amount, nonce)` that the server verifies against the sender's public key. Replay is prevented by the `wallet_nonces` table. **Replaces** the short-lived `auth_token` from `blockchain-data-model` with a Web3-standard pattern (MetaMask-style). |
 | 3 | Currency model | **Phased.** Phase I uses a single hard-coded native coin. Phase J introduces `currencies` and per-(wallet, currency) balances. Phase J is documented as a follow-up at the bottom of this doc and is **not in scope** for I.x. |
-| 4 | Persistence | Postgres remains source of truth. New tables (`users`, `user_credentials`, `user_roles`, `wallets`, `wallet_nonces`, `audit_log`, `role_permissions`, `user_permissions`) live next to `blocks`/`transactions`/`mempool`/`nodes`. |
-| 5 | P2P | Unchanged. Peers share *the* chain. Phase I just adds wallet/auth validation on top of the existing propagation surface. SaaS-style isolation is out of scope. |
+| 4 | Persistence | Postgres remains source of truth. New tables (`users`, `user_credentials`, `user_roles`, `wallets`, `wallet_nonces`, `audit_log`, `role_permissions`, `user_permissions`) live next to `blocks`/`transactions`/`mempool`/`nodes`. The mnemonic itself is **never** persisted; only `wallets.public_key`. |
+| 5 | P2P | Unchanged. Peers share *the* chain. Phase I just adds signature + nonce validation on top of the existing propagation surface. SaaS-style isolation is out of scope. |
 | 6 | Bootstrap ADMIN | First registered user with `username == BOOTSTRAP_ADMIN_USERNAME` (env var) is auto-promoted to ADMIN. Otherwise the user gets the default role (VIEWER). Documented in startup logs. |
+| 7 | Mnemonic generation locality | **Phase I.3 (MVP):** server generates the mnemonic, derives the keypair, returns `{wallet_id, public_key, mnemonic}` ONCE in the wallet creation response. The mnemonic lives in memory for the duration of that request and is then discarded; it is not logged or persisted. The frontend is responsible for showing it and forcing the user to confirm they saved it. **Phase J+ (future):** move generation to 100% client-side (`@scure/bip39` + `@noble/curves`); server only ever sees the public key. Documented as deferred. |
 
 ## Reference repo
 
@@ -58,22 +59,31 @@ Branch: `feat/rbac`.
 
 **Acceptance:** non-ADMIN gets 403 on admin endpoints; permission overrides exercised; every admin action writes an `audit_log` row.
 
-### Phase I.3 — Wallets, balances, authenticated transfers (sim **v0.13.0**)
+### Phase I.3 — Wallets, balances, signed transfers (sim **v0.13.0**)
 
 Branch: `feat/wallets-and-transfers`.
 
+Phase I.3 implements the Web3 wallet pattern: each wallet owns a secp256k1 keypair derived from a BIP-39 mnemonic. The private key **never lives in the database**; it is derived in-memory at creation, the mnemonic is returned once, then discarded. Each transfer carries an ECDSA signature the server verifies against the wallet's stored public key.
+
+**New backend dependencies:** `mnemonic>=0.21` (BIP-39 wordlists + checksum), `coincurve>=20.0` (libsecp256k1 binding for ECDSA + key derivation).
+
+**New frontend dependencies (Phase I.4):** `@scure/bip39`, `@noble/curves`.
+
 | ID | Work item | Files |
 |----|-----------|-------|
-| I.3.1 | V011 `wallets` (id, user_id FK, currency='NATIVE', balance, auth_token, token_issued_at, frozen) + V012 `wallet_nonces`. **Truncates `mempool` and `transactions`** because the new tx shape adds wallet IDs. | `migrations/versions/V011__wallets.sql`, `V012__wallet_nonces.sql` |
-| I.3.2 | `domain/models.py` Transaction: add `sender_wallet_id`, `receiver_wallet_id`, `nonce`. Keep `sender`/`receiver` display strings for v0.6.0 frontend back-compat (resolved to username). | `domain/models.py` |
-| I.3.3 | `domain/wallet.py` (WalletService, TransferService, MintService) + `infrastructure/postgres_wallet_store.py` | `domain/wallet.py`, `infrastructure/postgres_wallet_store.py` |
-| I.3.4 | `_mine` applies balance deltas in the same DB transaction as the block insert (idempotent: skip if already applied) | `basic-blockchain.py`, `infrastructure/postgres_wallet_store.py` |
-| I.3.5 | Endpoints: `POST /wallets`, `GET /wallets/me`, `POST /wallets/<id>/token`, `POST /transactions` (rewritten), `POST /admin/mint` | `api/wallet_routes.py` |
-| I.3.6 | `_validate_blocks` extension: each tx must reference existing wallets; total balances == minted supply (conservation invariant) | `domain/blockchain.py` |
-| I.3.7 | Tests: token validity, nonce replay (409), freeze (403), mint requires ADMIN (403 OPERATOR), supply conservation across N transfers | `tests/test_wallets.py`, `tests/test_transfers.py`, `tests/test_supply_conservation.py` |
-| I.3.8 | Docs: data-model + ER, api-reference for new endpoints, BR-WL-01..N, releases/v0.13.0.md | docs |
+| I.3.1 | V011 `wallets` (id, user_id FK, currency='NATIVE', balance, **`public_key TEXT NOT NULL`**, frozen) + V012 `wallet_nonces` (wallet_id PK, last_used_nonce, last_used_at). **Truncates `mempool` and `transactions`** because the new tx shape adds wallet IDs + signature. | `migrations/versions/V011__wallets.sql`, `V012__wallet_nonces.sql` |
+| I.3.2 | `domain/crypto.py`: `generate_mnemonic()`, `mnemonic_to_seed()`, `derive_keypair(seed)` → `(priv, pub)`, `sign(priv, message)`, `verify(pub, sig, message)`. Canonical signing message: `f"{sender_wallet_id}:{receiver_wallet_id}:{amount_str}:{nonce}"`. | `domain/crypto.py` |
+| I.3.3 | `domain/models.py` Transaction: add `sender_wallet_id`, `receiver_wallet_id`, `nonce: int`, `signature: str` (hex). Keep `sender`/`receiver` display strings for v0.6.0 frontend back-compat (resolved to username). `to_dict()` emits all fields. | `domain/models.py` |
+| I.3.4 | `domain/wallet.py`: `WalletService.create_wallet` generates the mnemonic, derives the keypair, persists ONLY the public key, returns `{wallet_id, public_key, mnemonic}`. `TransferService.build_transaction` verifies signature + monotonic nonce. `MintService` creates a coinbase transaction (system signature). + `infrastructure/postgres_wallet_store.py` | `domain/wallet.py`, `infrastructure/postgres_wallet_store.py` |
+| I.3.5 | `_mine` applies balance deltas in the same DB transaction as the block insert (idempotent: skip if already applied) | `basic-blockchain.py`, `infrastructure/postgres_wallet_store.py` |
+| I.3.6 | Endpoints: `POST /wallets` (returns mnemonic ONCE), `GET /wallets/me`, `POST /transactions` (requires `signature` + `nonce`), `POST /admin/mint`. The previous-plan `POST /wallets/<id>/token` is **removed** — the signature replaces the ephemeral token. | `api/wallet_routes.py` |
+| I.3.7 | `_validate_blocks` extension: each tx must reference existing wallets; signature must verify against `wallets.public_key`; nonce must be strictly greater than the last used nonce for that wallet (or the tx is reproducible from the chain itself); total balances == minted supply. | `domain/blockchain.py` |
+| I.3.8 | Tests: valid signature accepted; tampered signature rejected (403); nonce replay or decreasing rejected (409); freeze rejected (403); mint ADMIN-only; supply conservation; mnemonic→seed→keypair→sign→verify round-trip. | `tests/test_wallets.py`, `tests/test_transfers.py`, `tests/test_crypto.py`, `tests/test_supply_conservation.py` |
+| I.3.9 | Docs: data-model + ER (with `public_key`), api-reference (with "save your mnemonic" warning), BR-WL-01..N (signature mandatory, mnemonic returned once, supply conserved), releases/v0.13.0.md | docs |
 
-**Acceptance:** end-to-end transfer between two users; nonce replay rejected; freeze rejected; mint ADMIN-only; supply conserved.
+**Acceptance:** end-to-end transfer between two users using their mnemonic to sign locally; tampered signature rejected; nonce replay rejected; freeze rejected; mint ADMIN-only; supply conserved; mnemonic returned only on `POST /wallets` and never persisted in DB.
+
+**Phase I.4 implications:** wallet creation flow shows the mnemonic in a forced modal with an "I have saved my recovery phrase" checkbox before the user can proceed. The transfer form takes the mnemonic as a local-only password input, derives the keypair in browser memory (`@scure/bip39` + `@noble/curves`), signs the canonical message, and only sends `{sender_wallet_id, receiver_wallet_id, amount, nonce, signature}` to the backend — the mnemonic itself never crosses the wire on transfer.
 
 ### Phase I.4 — Frontend auth + wallet UX (frontend **v0.7.0**)
 
