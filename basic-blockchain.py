@@ -8,9 +8,11 @@ load_dotenv()
 
 from quart import Blueprint, Quart, g, jsonify, request
 
+from api.admin_routes import build_admin_blueprint
 from api.auth_middleware import install_auth_middleware
 from api.auth_routes import build_auth_blueprint
 from api.errors import bad_request, register_error_handlers
+from api.permissions import set_permission_resolver
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
@@ -58,6 +60,12 @@ def _v1_home_payload() -> dict[str, object]:
             "auth_activate": "/api/v1/auth/activate",
             "auth_login": "/api/v1/auth/login",
             "auth_me": "/api/v1/auth/me",
+            "admin_users": "/api/v1/admin/users",
+            "admin_roles": "/api/v1/admin/users/<id>/roles",
+            "admin_ban": "/api/v1/admin/users/<id>/ban",
+            "admin_unban": "/api/v1/admin/users/<id>/unban",
+            "admin_permissions": "/api/v1/admin/users/<id>/permissions",
+            "admin_audit": "/api/v1/admin/audit",
             "health": "/api/v1/health",
             "metrics": "/api/v1/metrics",
             "nodes_register": "/api/v1/nodes/register",
@@ -280,6 +288,17 @@ def create_app(
         bootstrap_admin_username=BOOTSTRAP_ADMIN_USERNAME,
     )
     api_v1.register_blueprint(auth_bp)
+
+    # Phase I.2: admin endpoints + RBAC resolvers. The decorator reads
+    # `g.current_user` populated by the auth middleware and falls back to
+    # the static defaults in `domain/permissions.py` if these loaders are
+    # not registered.
+    set_permission_resolver(
+        role_overrides=user_store.get_role_overrides,
+        user_overrides=user_store.get_user_overrides,
+    )
+    admin_bp = build_admin_blueprint(users=user_store)
+    api_v1.register_blueprint(admin_bp)
 
     app.register_blueprint(api_v1)
     register_error_handlers(app)
