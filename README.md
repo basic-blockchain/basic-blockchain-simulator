@@ -1,13 +1,13 @@
 # Blockchain Simulator
 
-![Version](https://img.shields.io/badge/version-v0.10.0-blue)
+![Version](https://img.shields.io/badge/version-v0.11.0-blue)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-107%20passed-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-83%25-green)
+![Tests](https://img.shields.io/badge/tests-132%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-81%25-green)
 
-**Latest stable release:** v0.10.0
+**Latest stable release:** v0.11.0
 
-Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, query confirmed transaction history, validate chain integrity (now including a per-block Merkle root over the embedded transactions), synchronise across nodes, monitor node health, and stream real-time block events via WebSocket — with optional PostgreSQL persistence.
+Backend blockchain simulator built with Python and Quart (ASGI). Exposes a versioned REST API to mine blocks, manage a mempool of pending transactions, query confirmed transaction history, validate chain integrity (Merkle root per block), synchronise across nodes, monitor node health, stream real-time block events via WebSocket, **and (since v0.11.0) authenticate users with JWT and role-based identity** — with optional PostgreSQL persistence.
 
 ---
 
@@ -110,6 +110,10 @@ Base path: `/api/v1`
 | `POST` | `/transactions` | Add a pending transaction to the mempool |
 | `GET` | `/transactions/pending` | List pending transactions |
 | `GET` | `/transactions` | List confirmed transactions (full history) |
+| `POST` | `/auth/register` | Register a new user; returns one-shot activation code |
+| `POST` | `/auth/activate` | Exchange activation code + chosen password for an active account |
+| `POST` | `/auth/login` | Issue a Bearer JWT (default TTL 30 min) |
+| `GET` | `/auth/me` | Current identity (requires `Authorization: Bearer <jwt>`) |
 | `GET` | `/health` | Node health: DB connectivity + chain height |
 | `GET` | `/metrics` | Chain height, pending tx count, avg mine time |
 | `POST` | `/nodes/register` | Register one or more peer node URLs |
@@ -162,6 +166,7 @@ Coverage gate: **80%** (enforced in CI).
 - **Genesis block** — Created automatically on first init; not re-created on restart when using PostgreSQL.
 - **Proof of Work** — SHA-256 hash of `(proof² - prev_proof²)` must start with `DIFFICULTY_PREFIX` (default `00000`).
 - **Merkle root** — Each block carries a `merkle_root` over its transactions (binary sha256 tree, Bitcoin-style odd-level duplication). The chain hash covers `merkle_root`, so any post-hoc edit to a confirmed transaction makes `is_chain_valid()` return `False`. Empty blocks use `EMPTY_MERKLE_ROOT = sha256("").hexdigest()`.
+- **Identity & roles** *(Phase I.1, v0.11.0)* — Three roles (`ADMIN`, `OPERATOR`, `VIEWER`); new users default to `VIEWER`. The first registered user whose username matches `BOOTSTRAP_ADMIN_USERNAME` is auto-promoted to `ADMIN`. JWTs are HS256 with `{sub, roles, iat, exp}` and a 30-min TTL. `JWT_SECRET` must be set in production (`TESTING=true` lets the test suite use a built-in sentinel). bcrypt cost is configurable through `BCRYPT_ROUNDS` (default 12).
 - **Repository pattern** — `BlockRepositoryProtocol` and `MempoolRepositoryProtocol` decouple domain logic from storage; swap in-memory ↔ PostgreSQL without touching service code.
 - **Structured logging** — Every event emits JSON `{ts, level, event, request_id, data}`; `request_id` is taken from the `X-Request-ID` header or auto-generated per request.
 - **WebSocket push** — Connected clients receive `{"event": "block_mined", "block": {...}}` the moment a block is mined, without polling. Connect to `ws://localhost:5000/api/v1/ws`.
