@@ -76,7 +76,11 @@ def _v1_home_payload() -> dict[str, object]:
     }
 
 
-def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, object]:
+def _mine(
+    blockchain: BlockchainService,
+    mempool: MempoolService,
+    wallet_repo=None,
+) -> dict[str, object]:
     previous_block = blockchain.previous_block()
     previous_proof = previous_block.proof
     proof = blockchain.proof_of_work(previous_proof)
@@ -87,6 +91,15 @@ def _mine(blockchain: BlockchainService, mempool: MempoolService) -> dict[str, o
     # save_confirmed_transactions call needed.
     included = mempool.flush()
     block = blockchain.create_block(proof, previous_hash, transactions=included)
+    # Phase I.3 — apply balance deltas for every confirmed transaction.
+    # Coinbase txs credit the receiver; transfers debit sender + credit
+    # receiver. The wallet repo is None in pure in-memory mode (legacy
+    # tests that never mint a wallet) — in that case the deltas are
+    # skipped because there are no wallets to mutate.
+    if wallet_repo is not None and included:
+        from domain.wallet import apply_block_deltas
+
+        apply_block_deltas(wallet_repo, included)
     included_dicts = [tx.to_dict() for tx in included]
     logger.info(
         "block_mined",
