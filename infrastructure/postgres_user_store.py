@@ -89,6 +89,64 @@ class PostgresUserStore:
                 (banned, user_id),
             )
 
+    # ── Soft-delete + profile edit (Phase I.5) ────────────────────
+
+    def soft_delete_user(self, user_id: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET deleted_at = now(), updated_at = now() "
+                "WHERE user_id = %s AND deleted_at IS NULL",
+                (user_id,),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
+    def restore_user(self, user_id: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET deleted_at = NULL, updated_at = now() "
+                "WHERE user_id = %s AND deleted_at IS NOT NULL",
+                (user_id,),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
+    def update_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None,
+        email: str | None,
+    ) -> None:
+        # Build SET clause dynamically so callers can update either field
+        # in isolation. `updated_at = now()` is always touched so the row
+        # carries an audit trail of the most recent admin edit.
+        sets: list[str] = []
+        params: list[object] = []
+        if display_name is not None:
+            sets.append("display_name = %s")
+            params.append(display_name)
+        if email is not None:
+            sets.append("email = %s")
+            params.append(email)
+        if not sets:
+            return
+        sets.append("updated_at = now()")
+        params.append(user_id)
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE users SET {', '.join(sets)} WHERE user_id = %s",
+                    params,
+                )
+                if cur.rowcount == 0:
+                    raise KeyError(user_id)
+        except psycopg2.errors.UniqueViolation as exc:
+            constraint = (exc.diag.constraint_name or "").lower()
+            if "email" in constraint:
+                raise EmailTakenError(email or "") from exc
+            raise
+
     # ── Credentials ───────────────────────────────────────────────────
 
     def create_credentials(
@@ -235,7 +293,7 @@ class PostgresUserStore:
 
 
 _USER_SELECT = (
-    "SELECT user_id, username, display_name, email, banned FROM users"
+    "SELECT user_id, username, display_name, email, banned, deleted_at FROM users"
 )
 
 
@@ -248,4 +306,5 @@ def _row_to_user(row: tuple | None) -> UserRecord | None:
         display_name=row[2],
         email=row[3],
         banned=bool(row[4]) if len(row) > 4 else False,
+        deleted_at=str(row[5]) if len(row) > 5 and row[5] is not None else None,
     )

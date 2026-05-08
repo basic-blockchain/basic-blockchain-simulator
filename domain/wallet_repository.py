@@ -28,6 +28,25 @@ class WalletRecord:
     frozen: bool
 
 
+@dataclass(slots=True)
+class WalletAdminRecord:
+    """Wallet row enriched with owner metadata.
+
+    Returned by `list_all_wallets`, the admin-only endpoint that joins
+    wallets with their owner so the UI can render "wallet -> who owns it"
+    without making N follow-up requests.
+    """
+
+    wallet_id: str
+    user_id: str
+    username: str
+    display_name: str
+    currency: str
+    balance: Decimal
+    public_key: str
+    frozen: bool
+
+
 class WalletNotFoundError(Exception):
     """Raised when a wallet ID does not exist."""
 
@@ -88,6 +107,11 @@ class WalletRepositoryProtocol(Protocol):
     def total_supply(self) -> Decimal:
         """Sum of every wallet's balance — invariant for the
         conservation-of-supply test."""
+        ...
+
+    def list_all_wallets(self) -> list[WalletAdminRecord]:
+        """Return every wallet enriched with its owner's username and
+        display_name. Used by the admin `/admin/wallets` endpoint."""
         ...
 
 
@@ -199,3 +223,21 @@ class InMemoryWalletStore:
 
     def total_supply(self) -> Decimal:
         return sum((w.balance for w in self._wallets.values()), Decimal(0))
+
+    def list_all_wallets(self) -> list[WalletAdminRecord]:
+        # InMemory has no users table to join against, so username and
+        # display_name come back empty. Tests that need richer data wire
+        # the Postgres store via the integration suite.
+        return [
+            WalletAdminRecord(
+                wallet_id=w.wallet_id,
+                user_id=w.user_id,
+                username="",
+                display_name="",
+                currency=w.currency,
+                balance=w.balance,
+                public_key=w.public_key,
+                frozen=w.frozen,
+            )
+            for w in self._wallets.values()
+        ]
