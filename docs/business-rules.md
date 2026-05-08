@@ -74,7 +74,7 @@ comments and test cases.
 | BR-RB-01 | A protected route declares its requirement with `@require_permission(Permission.X)`. The decorator aborts with HTTP 401 / `AUTH_REQUIRED` when there is no authenticated user, and HTTP 403 / `FORBIDDEN` when the authenticated user lacks the permission. | `api/permissions.py` (`require_permission`) |
 | BR-RB-02 | Permission resolution is 3-level: (1) per-user grants in `user_permissions`, (2) per-role overrides in `role_permissions`, (3) hardcoded baseline in `ROLE_PERMISSIONS`. The first match short-circuits. | `domain/permissions.py` (`has_permission`) |
 | BR-RB-03 | When a `role_permissions` row exists for a role, it **replaces** the hardcoded baseline for that role rather than augmenting it. A row that lists fewer permissions than the baseline therefore reduces the role's surface — which is the whole point of the override table. | `domain/permissions.py` (`has_permission`) |
-| BR-RB-04 | ADMIN's hardcoded baseline covers the user/role/permission management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`, `BAN_USER`, `UNBAN_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`, `VIEW_AUDIT_LOG`) plus the admin's own wallet ops (`CREATE_WALLET`, `TRANSFER`). Financial-action permissions (`MINT`, `FREEZE_WALLET`, `UNFREEZE_WALLET`) and cross-user data visibility (`VIEW_WALLETS`, `VIEW_TRANSFERS`) are **not** in ADMIN's baseline — they require an explicit grant per admin via `POST /admin/users/<self>/permissions`. The grant is audited. | `domain/permissions.py` (`ROLE_PERMISSIONS`) |
+| BR-RB-04 | ADMIN's hardcoded baseline covers the user/role/permission management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`, `BAN_USER`, `UNBAN_USER`, `DELETE_USER`, `RESTORE_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`, `VIEW_AUDIT_LOG`) plus wallet oversight (`VIEW_WALLETS`, `FREEZE_WALLET`, `UNFREEZE_WALLET`) and the admin's own wallet ops (`CREATE_WALLET`, `TRANSFER`). `MINT` and `VIEW_TRANSFERS` are **not** in ADMIN's baseline — they require an explicit per-admin grant via `POST /admin/users/<self>/permissions`. The grant is audited. | `domain/permissions.py` (`ROLE_PERMISSIONS`) |
 | BR-RB-05 | OPERATOR is "audit-light" by default: own wallet ops + cross-user read of wallets and transfers (`VIEW_WALLETS`, `VIEW_TRANSFERS`). VIEWER is the most-restricted role and the default at registration: own wallet ops only (`CREATE_WALLET`, `TRANSFER`). | `domain/permissions.py` (`ROLE_PERMISSIONS`) |
 | BR-RB-06 | Every state-mutating admin action (grant/revoke role, ban/unban user, grant/revoke permission) writes a row to `audit_log` with the actor, action, target, JSONB details, and a server-side `created_at`. The audit log is append-only by convention — no UPDATE / DELETE. | `domain/audit.py`, `api/admin_routes.py`, `infrastructure/postgres_user_store.py` |
 | BR-RB-07 | An admin cannot ban themselves; the ban endpoint returns HTTP 400 / `SELF_ACTION_FORBIDDEN` instead. This guarantees that at least the actor remains logged in to undo a wrong action. | `api/admin_routes.py` (`ban_user`) |
@@ -94,13 +94,25 @@ comments and test cases.
 | BR-WL-06 | `is_chain_valid()` re-verifies every non-coinbase transaction's signature against the sender wallet's stored `public_key` on every call. A tampered `transactions.amount`, `nonce`, or `signature` therefore makes validity flip to `false` even though the row was admitted at confirmation time. | `domain/blockchain.py` (`_validate_blocks`) |
 | BR-WL-07 | The only way to introduce new coin into the chain is `POST /api/v1/admin/mint`, gated by the `MINT` permission. `MINT` is **not** in the ADMIN baseline (BR-RB-04); an admin must self-grant it via `MANAGE_PERMISSIONS` first, and the grant lands in `audit_log`. The mint produces a transaction with `signature == "MINT"`. | `api/wallet_routes.py` (`admin_mint`), `domain/wallet.py` (`MintService`) |
 | BR-WL-08 | Total supply is conserved: `sum(wallets.balance) == sum(amount of every coinbase transaction)` at every chain height, regardless of how many transfers happened. Tests in `tests/test_supply_conservation.py` assert this across one transfer, many transfers in one block, and many transfers across many blocks. | `domain/wallet.py` (`apply_block_deltas`), `tests/test_supply_conservation.py` |
-| BR-WL-09 | The legacy `POST /api/v1/transactions` endpoint (v0.10.0 unauthenticated path) keeps working in v0.13.0 for back-compat with the v0.6.0 frontend, but its transactions never move balances — they are recorded in chain history with empty wallet IDs and skipped by `apply_block_deltas`. Phase I.4 frontend will switch to `/transactions/signed` and the legacy path becomes deprecated. | `domain/wallet.py` (`apply_block_deltas`), `api/wallet_routes.py` |
+| BR-WL-09 | The legacy `POST /api/v1/transactions` endpoint (v0.10.0 unauthenticated path) keeps working for back-compat with older clients, but its transactions never move balances — they are recorded in chain history with empty wallet IDs and skipped by `apply_block_deltas`. Phase I.4 switched the frontend to `/transactions/signed`; the legacy path remains deprecated. | `domain/wallet.py` (`apply_block_deltas`), `api/wallet_routes.py` |
 | BR-CH-03 | Chain replacement (consensus) is accepted only when the remote chain is strictly longer AND passes full validity checks. | `domain/consensus.py` (`resolve`) |
 | BR-CH-04 | The average mining time is computed only when the chain contains at least 2 blocks. With only the genesis block, `avg_mine_time_seconds` is `null`. | `domain/blockchain.py` (`avg_mine_time_seconds`) |
 
 ---
 
-## 5. Peer Node Rules
+## 8. Admin Enrichment Rules *(Phase I.5, v0.14.0)*
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-AD-01 | `DELETE /admin/users/<id>` soft-deletes a user by setting `users.deleted_at` and freezes all their wallets. The action is rejected if the user does not exist, is already deleted, or the actor is deleting themselves. | `api/admin_routes.py`, `infrastructure/postgres_user_store.py` |
+| BR-AD-02 | `POST /admin/users/<id>/restore` clears `deleted_at` and, by default, unfreezes the user's wallets (`unfreeze_wallets` defaults to true). | `api/admin_routes.py` |
+| BR-AD-03 | `PATCH /admin/users/<id>` updates `display_name` and/or `email` (both <= 255 chars). Email uniqueness is enforced; invalid inputs return `VALIDATION_ERROR`. | `api/admin_routes.py`, `infrastructure/postgres_user_store.py` |
+| BR-AD-04 | `GET /admin/wallets` lists all wallets with owner metadata (username, display_name) and current freeze state. | `api/admin_routes.py` |
+| BR-AD-05 | `POST /admin/wallets/<id>/freeze` and `/unfreeze` toggle wallet state and write audit entries (`WALLET_FROZEN` / `WALLET_UNFROZEN`). | `api/admin_routes.py`, `domain/audit.py` |
+
+---
+
+## 9. Peer Node Rules
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
@@ -111,7 +123,7 @@ comments and test cases.
 
 ---
 
-## 6. Consensus Rules
+## 10. Consensus Rules
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
@@ -123,7 +135,7 @@ comments and test cases.
 
 ---
 
-## 7. Persistence Rules
+## 11. Persistence Rules
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
@@ -136,7 +148,7 @@ comments and test cases.
 
 ---
 
-## 8. API Contract Rules
+## 12. API Contract Rules
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
@@ -147,7 +159,7 @@ comments and test cases.
 
 ---
 
-## 9. Logging Rules
+## 13. Logging Rules
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|

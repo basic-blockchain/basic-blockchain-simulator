@@ -7,6 +7,8 @@
 | **Client** | Any HTTP client (curl, Postman, browser, peer node) that calls the REST API. |
 | **Peer Node** | Another running instance of this simulator registered via `/nodes/register`. |
 | **WebSocket Subscriber** | A client holding an open connection to `/api/v1/ws`. |
+| **Authenticated User** | A user holding a valid JWT (VIEWER/OPERATOR/ADMIN). |
+| **Admin** | An authenticated user with admin permissions (user and wallet management). |
 | **Operator** | The person responsible for deploying and configuring the node (runs `migrate.py`, sets env vars). |
 | **System (Scheduler)** | Automated background process; not present in this version. |
 
@@ -42,6 +44,7 @@
 **Primary actor:** Client  
 **Preconditions:** Server is running.  
 **Trigger:** `POST /api/v1/transactions` with JSON body `{sender, receiver, amount}`.
+**Notes:** This legacy endpoint records transactions but does **not** move wallet balances in Phase I.3+.
 
 **Main flow:**
 1. Client sends transaction payload.
@@ -217,6 +220,118 @@
 
 ---
 
+## UC-13 — Register User
+
+**Primary actor:** Client
+**Trigger:** `POST /api/v1/auth/register`
+
+**Main flow:**
+1. Client sends `username`, optional `display_name`, optional `email`.
+2. System validates length and uniqueness.
+3. System creates the user and credentials record with an activation code.
+4. Returns HTTP 201 with the activation code.
+
+---
+
+## UC-14 — Activate Account
+
+**Primary actor:** Client
+**Trigger:** `POST /api/v1/auth/activate`
+
+**Main flow:**
+1. Client sends `username`, `activation_code`, and a password.
+2. System validates the activation code and password length.
+3. System hashes the password and marks the account activated.
+4. Returns HTTP 200.
+
+---
+
+## UC-15 — Login and Receive JWT
+
+**Primary actor:** Client
+**Trigger:** `POST /api/v1/auth/login`
+
+**Main flow:**
+1. Client sends `username` and `password`.
+2. System verifies credentials (uniform error on failure).
+3. System issues JWT and returns it with role list.
+
+---
+
+## UC-16 — Create Wallet
+
+**Primary actor:** Authenticated User
+**Trigger:** `POST /api/v1/wallets`
+
+**Main flow:**
+1. User calls the endpoint with a valid JWT.
+2. System derives a BIP-39 mnemonic and secp256k1 keypair.
+3. Wallet is stored with public key only.
+4. Response includes `mnemonic` once with a warning.
+
+---
+
+## UC-17 — Submit Signed Transfer
+
+**Primary actor:** Authenticated User
+**Trigger:** `POST /api/v1/transactions/signed`
+
+**Main flow:**
+1. User signs `sender_wallet_id:receiver_wallet_id:amount:nonce` locally.
+2. System verifies ownership, balance, signature, and monotonic nonce.
+3. Transaction is appended to the mempool.
+4. On next mine, balances update via `apply_block_deltas`.
+
+---
+
+## UC-18 — Admin User Management (roles/ban/permissions)
+
+**Primary actor:** Admin
+**Trigger:** `/api/v1/admin/users/*` routes
+
+**Main flow:**
+1. Admin lists users.
+2. Admin grants/revokes roles or permissions, or bans/unbans users.
+3. Each action writes an audit log entry.
+
+---
+
+## UC-19 — Admin Soft-Delete / Restore User
+
+**Primary actor:** Admin
+**Trigger:** `DELETE /api/v1/admin/users/<id>` and `POST /api/v1/admin/users/<id>/restore`
+
+**Main flow:**
+1. Admin soft-deletes a user (sets `deleted_at`) and freezes their wallets.
+2. Admin restores a user; optionally unfreezes wallets (default true).
+3. Each action writes an audit log entry.
+
+---
+
+## UC-20 — Admin Wallet Oversight
+
+**Primary actor:** Admin
+**Trigger:** `GET /api/v1/admin/wallets`, `POST /api/v1/admin/wallets/<id>/freeze|unfreeze`
+
+**Main flow:**
+1. Admin lists all wallets and their owners.
+2. Admin freezes or unfreezes a wallet.
+3. Each action writes an audit log entry.
+
+---
+
+## UC-21 — Admin Mint Tokens
+
+**Primary actor:** Admin (with `MINT` permission)
+**Trigger:** `POST /api/v1/admin/mint`
+
+**Main flow:**
+1. Admin submits `wallet_id` and `amount`.
+2. System enqueues a coinbase transaction in the mempool.
+3. On next mine, balances update.
+
+---
+
 ## Use Case Relationship Diagram
 
 ```mermaid
@@ -233,6 +348,15 @@ graph TD
     Operator -->|CLI| UC10[UC-10 Run Migrations]
     Client -->|GET /transactions/pending| UC11[UC-11 List Pending Txs]
     Client -->|GET /nodes| UC12[UC-12 List Nodes]
+      Client -->|POST /auth/register| UC13[UC-13 Register User]
+      Client -->|POST /auth/activate| UC14[UC-14 Activate Account]
+      Client -->|POST /auth/login| UC15[UC-15 Login]
+      User[Authenticated User] -->|POST /wallets| UC16[UC-16 Create Wallet]
+      User -->|POST /transactions/signed| UC17[UC-17 Signed Transfer]
+      Admin -->|admin users| UC18[UC-18 Admin User Mgmt]
+      Admin -->|delete/restore user| UC19[UC-19 Soft-Delete/Restore]
+      Admin -->|admin wallets| UC20[UC-20 Wallet Oversight]
+      Admin -->|POST /admin/mint| UC21[UC-21 Mint Tokens]
 
     UC01 -->|triggers| UC07
     UC01 -->|fire-and-forget| UC05

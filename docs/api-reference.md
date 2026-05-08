@@ -39,11 +39,12 @@ the response; check server logs for correlation.
 
 ## Authentication (Phase I.1, v0.11.0)
 
-The simulator issues Bearer JWTs (HS256, default 30-minute TTL). Most write
-endpoints will require the header `Authorization: Bearer <jwt>` once Phase
-I.2 / I.3 land; for v0.11.0 the auth surface is the four endpoints below
-plus a permissive middleware that decodes the token if present and
-attaches a `current_user` to the request context.
+The simulator issues Bearer JWTs (HS256, default 30-minute TTL). Routes
+that need authentication call `require_auth()` or are wrapped with
+`@require_permission(...)`. Public routes skip token parsing and include
+`/`, `/api/v1/health`, `/api/v1/chain`, `/api/v1/valid`, and
+`/api/v1/auth/*`. The middleware rejects malformed or expired tokens with
+401 and attaches `current_user` to the request context when valid.
 
 The following error codes are specific to the auth flow:
 
@@ -131,7 +132,7 @@ Requires `Authorization: Bearer <jwt>`.
 
 ---
 
-## Admin endpoints (Phase I.2, v0.12.0)
+## Admin endpoints (Phase I.2–I.5, v0.14.0)
 
 All admin routes require an authenticated user holding the right
 permission. Failures return:
@@ -141,18 +142,21 @@ permission. Failures return:
 | 401 | `AUTH_REQUIRED` | No bearer token on the request |
 | 403 | `FORBIDDEN` | Token is valid but the user lacks the gating permission |
 | 400 | `USER_NOT_FOUND` | The path `<id>` does not exist |
+| 400 | `USER_ALREADY_DELETED` | The user is already soft-deleted |
+| 400 | `USER_NOT_DELETED` | The user is not deleted (restore attempted) |
+| 400 | `WALLET_NOT_FOUND` | The wallet ID does not exist |
 | 400 | `SELF_ACTION_FORBIDDEN` | An admin attempts to ban / demote themselves |
 | 400 | `VALIDATION_ERROR` | Body shape, unknown role, unknown permission, etc. |
+| 400 | `EMAIL_TAKEN` | Email already used by another account |
 
-ADMIN's hardcoded baseline (in `domain/permissions.py`) covers **only**
-the user-management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`,
-`BAN_USER`, `UNBAN_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`,
-`VIEW_AUDIT_LOG`) plus their own wallet ops (`CREATE_WALLET`,
-`TRANSFER`). Financial-action and cross-user data permissions
-(`MINT`, `FREEZE_WALLET`, `UNFREEZE_WALLET`, `VIEW_WALLETS`,
-`VIEW_TRANSFERS`) are **not** in the baseline — even an ADMIN must
-self-grant them through `POST /admin/users/<self>/permissions` (the
-grant is audited).
+ADMIN's hardcoded baseline (in `domain/permissions.py`) covers the
+user-management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`,
+`BAN_USER`, `UNBAN_USER`, `DELETE_USER`, `RESTORE_USER`, `ASSIGN_ROLE`,
+`MANAGE_PERMISSIONS`, `VIEW_AUDIT_LOG`) plus wallet oversight
+(`VIEW_WALLETS`, `FREEZE_WALLET`, `UNFREEZE_WALLET`) and their own wallet
+ops (`CREATE_WALLET`, `TRANSFER`). `MINT` and `VIEW_TRANSFERS` remain
+**outside** the baseline — even an ADMIN must self-grant them through
+`POST /admin/users/<self>/permissions` (the grant is audited).
 
 ### GET /api/v1/admin/users  *(permission VIEW_USERS)*
 
@@ -164,6 +168,41 @@ grant is audited).
   ],
   "count": 1
 }
+```
+
+### PATCH /api/v1/admin/users/<id>  *(permission UPDATE_USER)*
+
+Updates profile fields. Body is partial; only provided fields are updated.
+
+```json
+{ "display_name": "Alice Cooper", "email": "alice@new.example" }
+```
+
+**Response 200**
+```json
+{ "user_id": "…", "display_name": "Alice Cooper", "email": "alice@new.example" }
+```
+
+### DELETE /api/v1/admin/users/<id>  *(permission DELETE_USER)*
+
+Soft-deletes a user and freezes all their wallets.
+
+**Response 200**
+```json
+{ "user_id": "…", "deleted": true, "frozen_wallets": ["w_..."] }
+```
+
+### POST /api/v1/admin/users/<id>/restore  *(permission RESTORE_USER)*
+
+Restores a soft-deleted user. Optional `unfreeze_wallets` (default true).
+
+```json
+{ "unfreeze_wallets": true }
+```
+
+**Response 200**
+```json
+{ "user_id": "…", "restored": true, "unfrozen_wallets": ["w_..."] }
 ```
 
 ### POST /api/v1/admin/users/<id>/roles  *(permission ASSIGN_ROLE)*
@@ -181,7 +220,7 @@ Body: empty. Self-ban is rejected with `SELF_ACTION_FORBIDDEN`.
 A banned user cannot log in — login returns the uniform
 `AUTH_INVALID_CREDENTIALS` (no enumeration leak). Existing JWTs
 remain valid until they expire; revoke-on-ban is out of scope
-for v0.12.0.
+for the current release.
 
 ### POST /api/v1/admin/users/<id>/unban  *(permission UNBAN_USER)*
 
@@ -211,6 +250,35 @@ Returns the most recent admin audit entries (newest first). Optional
 }
 ```
 
+### GET /api/v1/admin/wallets  *(permission VIEW_WALLETS)*
+
+Returns all wallets across users with owner metadata.
+
+```json
+{
+  "wallets": [
+    { "wallet_id": "w_...", "user_id": "...", "username": "alice",
+      "display_name": "Alice", "currency": "NATIVE", "balance": "100.0",
+      "public_key": "02f3...", "frozen": false }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/v1/admin/wallets/<wallet_id>/freeze  *(permission FREEZE_WALLET)*
+
+**Response 200**
+```json
+{ "wallet_id": "w_...", "frozen": true }
+```
+
+### POST /api/v1/admin/wallets/<wallet_id>/unfreeze  *(permission UNFREEZE_WALLET)*
+
+**Response 200**
+```json
+{ "wallet_id": "w_...", "frozen": false }
+```
+
 ---
 
 ## Wallet endpoints (Phase I.3, v0.13.0)
@@ -229,6 +297,17 @@ f"{sender_wallet_id}:{receiver_wallet_id}:{amount}:{nonce}"
 positive integer strictly greater than the wallet's last accepted
 nonce. The reference Python helper is
 `domain.crypto.canonical_transfer_message(...)`.
+
+Common error codes for wallet endpoints:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `WALLET_NOT_FOUND` | Unknown wallet ID |
+| 400 | `WALLET_FROZEN` | Wallet is frozen |
+| 400 | `INSUFFICIENT_BALANCE` | Sender lacks funds |
+| 400 | `SIGNATURE_INVALID` | Signature fails verification |
+| 400 | `NONCE_REPLAY` | Nonce is not strictly greater |
+| 400 | `WALLET_OWNERSHIP` | Caller does not own sender wallet |
 
 ### POST /api/v1/wallets  *(permission CREATE_WALLET)*
 
