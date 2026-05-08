@@ -40,9 +40,10 @@ def _load_module():
 
 def test_admin_baseline_holds_user_management_only():
     """ADMIN's hardcoded baseline covers user / role / permission
-    management plus the admin's own wallet ops. Financial-action and
-    cross-user data permissions are NOT in the baseline — they require
-    an explicit grant via `user_permissions`."""
+    management, wallet management ops (VIEW_WALLETS, FREEZE_WALLET,
+    UNFREEZE_WALLET), and the admin's own wallet ops. MINT and
+    VIEW_TRANSFERS remain absent — they require an explicit grant via
+    `user_permissions`."""
     granted_by_default = {
         Permission.CREATE_USER,
         Permission.VIEW_USERS,
@@ -54,12 +55,13 @@ def test_admin_baseline_holds_user_management_only():
         Permission.VIEW_AUDIT_LOG,
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
+        # Wallet management ops added in Phase I.5
+        Permission.VIEW_WALLETS,
+        Permission.FREEZE_WALLET,
+        Permission.UNFREEZE_WALLET,
     }
     not_granted_by_default = {
         Permission.MINT,
-        Permission.FREEZE_WALLET,
-        Permission.UNFREEZE_WALLET,
-        Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
     }
     for perm in granted_by_default:
