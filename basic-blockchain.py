@@ -64,12 +64,18 @@ def _v1_home_payload() -> dict[str, object]:
             "auth_login": "/api/v1/auth/login",
             "auth_me": "/api/v1/auth/me",
             "admin_users": "/api/v1/admin/users",
+            "admin_user_update": "/api/v1/admin/users/<id>",
+            "admin_user_delete": "/api/v1/admin/users/<id>",
+            "admin_user_restore": "/api/v1/admin/users/<id>/restore",
             "admin_roles": "/api/v1/admin/users/<id>/roles",
             "admin_ban": "/api/v1/admin/users/<id>/ban",
             "admin_unban": "/api/v1/admin/users/<id>/unban",
             "admin_permissions": "/api/v1/admin/users/<id>/permissions",
             "admin_audit": "/api/v1/admin/audit",
             "admin_mint": "/api/v1/admin/mint",
+            "admin_wallets": "/api/v1/admin/wallets",
+            "admin_wallet_freeze": "/api/v1/admin/wallets/<id>/freeze",
+            "admin_wallet_unfreeze": "/api/v1/admin/wallets/<id>/unfreeze",
             "wallets_create": "/api/v1/wallets",
             "wallets_me": "/api/v1/wallets/me",
             "transactions_signed": "/api/v1/transactions/signed",
@@ -324,7 +330,7 @@ def create_app(
         role_overrides=user_store.get_role_overrides,
         user_overrides=user_store.get_user_overrides,
     )
-    admin_bp = build_admin_blueprint(users=user_store)
+    admin_bp = build_admin_blueprint(users=user_store, wallets=wallet_store)
     api_v1.register_blueprint(admin_bp)
 
     # Phase I.3: wallet endpoints (create, list-mine, signed transfer,
