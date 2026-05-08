@@ -8,21 +8,25 @@ All diagrams use [Mermaid](https://mermaid.js.org/) syntax.
 
 ```mermaid
 flowchart TD
-    A([Start: python basic-blockchain.py]) --> B{DATABASE_URL set?}
-    B -- No --> C[Load InMemoryBlockRepository\nInMemoryMempoolRepository\nInMemoryNodeRegistry]
-    B -- Yes --> D[Load PostgresBlockRepository\nPostgresMempoolRepository\nPostgresNodeRegistry]
-    C --> E[BlockchainService init]
-    D --> E
-    E --> F{Repository empty?}
-    F -- Yes --> G[Create Genesis Block\nindex=1, proof=1, prev_hash=0]
-    F -- No --> H[Attach to existing chain]
-    G --> I[MempoolService init]
-    H --> I
-    I --> J[PropagationService init]
-    J --> K[ConsensusService init]
-    K --> L[WebSocketHub init]
-    L --> M[Register API blueprints\n+ error handlers]
-    M --> N([Server listening on :5000])
+    A([Start: python basic-blockchain.py]) --> B[Load .env (python-dotenv)]
+    B --> C{JWT_SECRET set\nor TESTING=true?}
+    C -- No --> D[Error: JWT_SECRET required]
+    C -- Yes --> E{DATABASE_URL set?}
+    E -- No --> F[Load InMemoryBlockRepository\nInMemoryMempoolRepository\nInMemoryNodeRegistry\nInMemoryUserStore\nInMemoryWalletStore]
+    E -- Yes --> G[Load PostgresBlockRepository\nPostgresMempoolRepository\nPostgresNodeRegistry\nPostgresUserStore\nPostgresWalletStore]
+    F --> H[BlockchainService init (wallet repo bound)]
+    G --> H
+    H --> I{Repository empty?}
+    I -- Yes --> J[Create Genesis Block\nindex=1, proof=1, prev_hash=0]
+    I -- No --> K[Attach to existing chain]
+    J --> L[MempoolService init]
+    K --> L
+    L --> M[PropagationService init]
+    M --> N[ConsensusService init]
+    N --> O[WebSocketHub init]
+    O --> P[Install JWT middleware]
+    P --> Q[Register API blueprints\n+ error handlers]
+    Q --> R([Server listening on :5000])
 ```
 
 ---
@@ -53,10 +57,11 @@ sequenceDiagram
     BS-->>API: new_proof
     API->>BS: hash_block(prev_block)
     BS-->>API: prev_hash
-    API->>BS: create_block(new_proof, prev_hash)
-    BS-->>API: new_block (persisted)
     API->>MS: flush()
     MS-->>API: [Transaction, ...]
+    API->>BS: create_block(new_proof, prev_hash, transactions)
+    BS-->>API: new_block (persisted)
+    Note over API: apply_block_deltas\nfor wallet balances
     API->>WS: broadcast({event: block_mined, block: {...}})
     WS-->>C: WebSocket push (all subscribers)
     API->>PS: notify_resolve()
@@ -66,7 +71,7 @@ sequenceDiagram
 
 ---
 
-## 3. Transaction Submission Flow (POST /api/v1/transactions)
+## 3. Legacy Transaction Submission Flow (POST /api/v1/transactions)
 
 ```mermaid
 flowchart TD
@@ -87,7 +92,28 @@ flowchart TD
 
 ---
 
-## 4. Consensus Resolution Flow (GET /api/v1/nodes/resolve)
+## 4. Signed Transfer Submission Flow (POST /api/v1/transactions/signed)
+
+```mermaid
+flowchart TD
+    A([Client: POST /transactions/signed]) --> B[parse_signed_transaction\nschema validation]
+    B --> C{Fields valid?}
+    C -- No --> D[400 VALIDATION_ERROR]
+    C -- Yes --> E[Load sender + receiver wallets]
+    E --> F{Wallets exist?}
+    F -- No --> G[400 WALLET_NOT_FOUND]
+    F -- Yes --> H{Caller owns sender?}
+    H -- No --> I[400 WALLET_OWNERSHIP]
+    H -- Yes --> J[TransferService.build_transaction]
+    J --> K{Frozen / balance / signature / nonce ok?}
+    K -- No --> L[400 WALLET_FROZEN / INSUFFICIENT_BALANCE / SIGNATURE_INVALID / NONCE_REPLAY]
+    K -- Yes --> M[MempoolService.add]
+    M --> N[201 Transaction admitted]
+```
+
+---
+
+## 5. Consensus Resolution Flow (GET /api/v1/nodes/resolve)
 
 ```mermaid
 flowchart TD
@@ -113,7 +139,7 @@ flowchart TD
 
 ---
 
-## 5. WebSocket Event Flow
+## 6. WebSocket Event Flow
 
 ```mermaid
 sequenceDiagram
@@ -134,7 +160,7 @@ sequenceDiagram
 
 ---
 
-## 6. Transaction Propagation Loop Prevention
+## 7. Transaction Propagation Loop Prevention
 
 ```mermaid
 sequenceDiagram
@@ -156,7 +182,7 @@ sequenceDiagram
 
 ---
 
-## 7. Database Migration Flow (python migrations/migrate.py)
+## 8. Database Migration Flow (python migrations/migrate.py)
 
 ```mermaid
 flowchart TD
@@ -187,7 +213,7 @@ flowchart TD
 
 ---
 
-## 8. Proof-of-Work Algorithm
+## 9. Proof-of-Work Algorithm
 
 ```mermaid
 flowchart TD
@@ -200,7 +226,7 @@ flowchart TD
 
 ---
 
-## 9. Chain Validation Algorithm
+## 10. Chain Validation Algorithm
 
 ```mermaid
 flowchart TD
@@ -213,13 +239,17 @@ flowchart TD
     G -- No --> H([return False])
     G -- Yes --> I{SHA256\nblock.proof² − prev.proof²\nstarts with prefix?}
     I -- No --> H
-    I -- Yes --> J[i += 1]
-    J --> D
+    I -- Yes --> J{merkle_root\nrecomputes?}
+    J -- No --> H
+    J -- Yes --> K{signatures\nverify?}
+    K -- No --> H
+    K -- Yes --> L[i += 1]
+    L --> D
 ```
 
 ---
 
-## 10. Request ID Lifecycle
+## 11. Request ID Lifecycle
 
 ```mermaid
 sequenceDiagram
