@@ -24,6 +24,7 @@ import psycopg2
 from domain.wallet_repository import (
     InsufficientBalanceError,
     NonceReplayError,
+    WalletAdminRecord,
     WalletFrozenError,
     WalletNotFoundError,
     WalletRecord,
@@ -154,6 +155,32 @@ class PostgresWalletStore:
             cur.execute("SELECT COALESCE(SUM(balance), 0) FROM wallets")
             row = cur.fetchone()
         return Decimal(row[0]) if row else Decimal(0)
+
+    def list_all_wallets(self) -> list[WalletAdminRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT w.wallet_id, w.user_id, u.username, u.display_name,
+                       w.currency, w.balance, w.public_key, w.frozen
+                FROM wallets w
+                JOIN users u ON u.user_id = w.user_id
+                ORDER BY u.username, w.created_at
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            WalletAdminRecord(
+                wallet_id=r[0],
+                user_id=r[1],
+                username=r[2],
+                display_name=r[3],
+                currency=r[4],
+                balance=Decimal(r[5]),
+                public_key=r[6],
+                frozen=bool(r[7]),
+            )
+            for r in rows
+        ]
 
 
 _WALLET_SELECT = (

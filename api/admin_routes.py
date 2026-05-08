@@ -19,23 +19,33 @@ from domain.audit import (
     ACTION_ROLE_GRANTED,
     ACTION_ROLE_REVOKED,
     ACTION_USER_BANNED,
+    ACTION_USER_DELETED,
+    ACTION_USER_RESTORED,
     ACTION_USER_UNBANNED,
+    ACTION_USER_UPDATED,
+    ACTION_WALLET_FROZEN,
+    ACTION_WALLET_UNFROZEN,
 )
 from domain.auth import Role
 from domain.permissions import Permission
-from domain.user_repository import UserRepositoryProtocol
+from domain.user_repository import EmailTakenError, UserRepositoryProtocol
+from domain.wallet_repository import WalletRepositoryProtocol
 
 
 _VALID_ROLES = {r.value for r in Role}
 _VALID_PERMISSIONS = {p.value for p in Permission}
 
 
-def build_admin_blueprint(*, users: UserRepositoryProtocol) -> Blueprint:
-    """Return the `/admin` blueprint bound to a user repository.
+def build_admin_blueprint(
+    *,
+    users: UserRepositoryProtocol,
+    wallets: WalletRepositoryProtocol,
+) -> Blueprint:
+    """Return the `/admin` blueprint bound to a user + wallet repository.
 
-    The repository is the one place we read users / roles / overrides /
-    audit from, so the routes never reach into the persistence layer
-    directly.
+    The repositories are the one place we read users / wallets / roles /
+    overrides / audit from, so the routes never reach into the
+    persistence layer directly.
     """
     bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -214,5 +224,196 @@ def build_admin_blueprint(*, users: UserRepositoryProtocol) -> Blueprint:
             ),
             200,
         )
+
+    # ── PATCH /admin/users/<user_id> ─────────────────────────────────
+
+    @bp.route("/users/<user_id>", methods=["PATCH"])
+    @require_permission(Permission.UPDATE_USER)
+    async def update_user(user_id: str):
+        actor = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        display_name = data.get("display_name")
+        email = data.get("email")
+        if display_name is not None and (
+            not isinstance(display_name, str) or len(display_name) > 255
+        ):
+            return bad_request(
+                "display_name must be a string <= 255 chars",
+                "VALIDATION_ERROR",
+            )
+        if email is not None and (
+            not isinstance(email, str) or len(email) > 255
+        ):
+            return bad_request(
+                "email must be a string <= 255 chars",
+                "VALIDATION_ERROR",
+            )
+        target = users.get_user_by_id(user_id)
+        if target is None:
+            return bad_request("User not found", "USER_NOT_FOUND")
+        try:
+            users.update_user(
+                user_id=user_id,
+                display_name=display_name.strip() if isinstance(display_name, str) else None,
+                email=email.strip() if isinstance(email, str) else None,
+            )
+        except EmailTakenError:
+            return bad_request("Email already in use", "EMAIL_TAKEN")
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_USER_UPDATED,
+            target_id=user_id,
+            details={"display_name": display_name, "email": email},
+        )
+        updated = users.get_user_by_id(user_id)
+        return (
+            jsonify(
+                {
+                    "user_id": user_id,
+                    "display_name": updated.display_name if updated else None,
+                    "email": updated.email if updated else None,
+                }
+            ),
+            200,
+        )
+
+    # ── DELETE /admin/users/<user_id> (soft-delete) ──────────────────
+
+    @bp.route("/users/<user_id>", methods=["DELETE"])
+    @require_permission(Permission.DELETE_USER)
+    async def soft_delete_user(user_id: str):
+        actor = require_auth()
+        target = users.get_user_by_id(user_id)
+        if target is None:
+            return bad_request("User not found", "USER_NOT_FOUND")
+        if target.user_id == actor.user_id:
+            return bad_request(
+                "An admin cannot delete themselves",
+                "SELF_ACTION_FORBIDDEN",
+            )
+        if target.deleted_at:
+            return bad_request("User already deleted", "USER_ALREADY_DELETED")
+        # Freeze every wallet the user owns first; soft-delete must not
+        # leave hot wallets behind that could still send funds out.
+        frozen: list[str] = []
+        for w in wallets.list_user_wallets(user_id):
+            if not w.frozen:
+                wallets.set_frozen(wallet_id=w.wallet_id, frozen=True)
+            frozen.append(w.wallet_id)
+        users.soft_delete_user(user_id)
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_USER_DELETED,
+            target_id=user_id,
+            details={"frozen_wallets": frozen},
+        )
+        return (
+            jsonify(
+                {"user_id": user_id, "deleted": True, "frozen_wallets": frozen}
+            ),
+            200,
+        )
+
+    # ── POST /admin/users/<user_id>/restore ──────────────────────────
+
+    @bp.route("/users/<user_id>/restore", methods=["POST"])
+    @require_permission(Permission.RESTORE_USER)
+    async def restore_user(user_id: str):
+        actor = require_auth()
+        target = users.get_user_by_id(user_id)
+        if target is None:
+            return bad_request("User not found", "USER_NOT_FOUND")
+        if not target.deleted_at:
+            return bad_request("User is not deleted", "USER_NOT_DELETED")
+        data = await request.get_json(silent=True) or {}
+        unfreeze = bool(data.get("unfreeze_wallets", True)) if isinstance(data, dict) else True
+        users.restore_user(user_id)
+        unfrozen: list[str] = []
+        if unfreeze:
+            for w in wallets.list_user_wallets(user_id):
+                wallets.set_frozen(wallet_id=w.wallet_id, frozen=False)
+                unfrozen.append(w.wallet_id)
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_USER_RESTORED,
+            target_id=user_id,
+            details={"unfrozen_wallets": unfrozen},
+        )
+        return (
+            jsonify(
+                {
+                    "user_id": user_id,
+                    "restored": True,
+                    "unfrozen_wallets": unfrozen,
+                }
+            ),
+            200,
+        )
+
+    # ── GET /admin/wallets ───────────────────────────────────────────
+
+    @bp.route("/wallets", methods=["GET"])
+    @require_permission(Permission.VIEW_WALLETS)
+    async def list_all_wallets():
+        records = wallets.list_all_wallets()
+        return (
+            jsonify(
+                {
+                    "wallets": [
+                        {
+                            "wallet_id": w.wallet_id,
+                            "user_id": w.user_id,
+                            "username": w.username,
+                            "display_name": w.display_name,
+                            "currency": w.currency,
+                            "balance": str(w.balance),
+                            "public_key": w.public_key,
+                            "frozen": w.frozen,
+                        }
+                        for w in records
+                    ],
+                    "count": len(records),
+                }
+            ),
+            200,
+        )
+
+    # ── POST /admin/wallets/<wallet_id>/freeze ───────────────────────
+
+    @bp.route("/wallets/<wallet_id>/freeze", methods=["POST"])
+    @require_permission(Permission.FREEZE_WALLET)
+    async def freeze_wallet(wallet_id: str):
+        actor = require_auth()
+        wallet = wallets.get_wallet(wallet_id)
+        if wallet is None:
+            return bad_request("Wallet not found", "WALLET_NOT_FOUND")
+        wallets.set_frozen(wallet_id=wallet_id, frozen=True)
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_WALLET_FROZEN,
+            target_id=wallet_id,
+            details={"user_id": wallet.user_id},
+        )
+        return jsonify({"wallet_id": wallet_id, "frozen": True}), 200
+
+    # ── POST /admin/wallets/<wallet_id>/unfreeze ─────────────────────
+
+    @bp.route("/wallets/<wallet_id>/unfreeze", methods=["POST"])
+    @require_permission(Permission.UNFREEZE_WALLET)
+    async def unfreeze_wallet(wallet_id: str):
+        actor = require_auth()
+        wallet = wallets.get_wallet(wallet_id)
+        if wallet is None:
+            return bad_request("Wallet not found", "WALLET_NOT_FOUND")
+        wallets.set_frozen(wallet_id=wallet_id, frozen=False)
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_WALLET_UNFROZEN,
+            target_id=wallet_id,
+            details={"user_id": wallet.user_id},
+        )
+        return jsonify({"wallet_id": wallet_id, "frozen": False}), 200
 
     return bp
