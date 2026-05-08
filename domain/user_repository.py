@@ -26,6 +26,7 @@ class UserRecord:
     display_name: str
     email: str | None = None
     banned: bool = False
+    deleted_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -83,6 +84,19 @@ class UserRepositoryProtocol(Protocol):
     def list_users(self) -> list[UserRecord]: ...
 
     def set_banned(self, *, user_id: str, banned: bool) -> None: ...
+
+    # Soft-delete + profile edit (Phase I.5)
+    def soft_delete_user(self, user_id: str) -> None: ...
+
+    def restore_user(self, user_id: str) -> None: ...
+
+    def update_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None,
+        email: str | None,
+    ) -> None: ...
 
     # Permission overrides (Phase I.2)
     def get_role_overrides(self) -> dict[str, set[str]]: ...
@@ -209,6 +223,62 @@ class InMemoryUserStore:
             display_name=rec.display_name,
             email=rec.email,
             banned=banned,
+            deleted_at=rec.deleted_at,
+        )
+
+    # ── Soft-delete + profile edit (Phase I.5) ─────────────────────
+
+    def soft_delete_user(self, user_id: str) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        self._users[user_id] = UserRecord(
+            user_id=rec.user_id,
+            username=rec.username,
+            display_name=rec.display_name,
+            email=rec.email,
+            banned=rec.banned,
+            deleted_at="deleted",
+        )
+
+    def restore_user(self, user_id: str) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        self._users[user_id] = UserRecord(
+            user_id=rec.user_id,
+            username=rec.username,
+            display_name=rec.display_name,
+            email=rec.email,
+            banned=rec.banned,
+            deleted_at=None,
+        )
+
+    def update_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None,
+        email: str | None,
+    ) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        new_email = rec.email if email is None else email
+        # Keep the email index in sync so future username/email lookups
+        # remain consistent after profile edits.
+        if email is not None and email != rec.email:
+            if rec.email and rec.email in self._by_email:
+                del self._by_email[rec.email]
+            if email:
+                self._by_email[email] = user_id
+        self._users[user_id] = UserRecord(
+            user_id=rec.user_id,
+            username=rec.username,
+            display_name=display_name if display_name is not None else rec.display_name,
+            email=new_email,
+            banned=rec.banned,
+            deleted_at=rec.deleted_at,
         )
 
     # ── Permission overrides ───────────────────────────────────────
