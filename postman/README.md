@@ -20,6 +20,9 @@
 | Folder | Requests | Responsibility |
 |--------|----------|----------------|
 | 🔌 Node Status | 1 | Connectivity check, route index |
+| 🔐 Auth | 4 | Register, activate, login, profile |
+| 👛 Wallets | 3 | Create wallet, list mine, signed transfers |
+| 🛡 Admin | 13 | Users, roles, permissions, wallets, mint, audit |
 | ⛏ Mining | 1 | Block mining via Proof-of-Work |
 | 📋 Mempool | 4 | Submit transactions, inspect pending queue |
 | 🔗 Chain | 2 | Read chain, validate integrity |
@@ -33,10 +36,30 @@
 |----------|---------|--------|
 | `base_url` | `http://127.0.0.1:5000` | User |
 | `api_base` | `{{base_url}}/api/v1` | Derived |
+| `username` | `alice` | User |
+| `display_name` | `Alice` | User |
+| `email` | `alice@example.com` | User |
+| `password` | `hunter12345` | User |
+| `activation_code` | _(empty)_ | Register test script |
+| `access_token` | _(empty)_ | Login test script |
+| `user_id` | _(empty)_ | Register/Login test script |
 | `peer_url` | `http://127.0.0.1:5001` | User |
 | `sender` | `alice` | User |
 | `receiver` | `bob` | User |
 | `amount` | `10.5` | User |
+| `wallet_id` | _(empty)_ | Create Wallet test script |
+| `wallet_public_key` | _(empty)_ | Create Wallet test script |
+| `receiver_wallet_id` | _(empty)_ | User |
+| `transfer_amount` | `1.25` | User |
+| `transfer_nonce` | `1` | User |
+| `transfer_signature` | _(empty)_ | User |
+| `admin_user_id` | _(empty)_ | User |
+| `admin_wallet_id` | _(empty)_ | User |
+| `admin_display_name` | `Alice Admin` | User |
+| `admin_email` | `alice.admin@example.com` | User |
+| `role_name` | `OPERATOR` | User |
+| `permission_name` | `VIEW_WALLETS` | User |
+| `mint_amount` | `25` | User |
 | `last_block_index` | _(empty)_ | Mine Block test script |
 | `last_proof` | _(empty)_ | Mine Block test script |
 | `chain_length` | _(empty)_ | Get Chain / Resolve Consensus test script |
