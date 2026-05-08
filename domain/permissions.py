@@ -36,6 +36,8 @@ class Permission(str, Enum):
     UPDATE_USER = "UPDATE_USER"
     BAN_USER = "BAN_USER"
     UNBAN_USER = "UNBAN_USER"
+    DELETE_USER = "DELETE_USER"
+    RESTORE_USER = "RESTORE_USER"
     ASSIGN_ROLE = "ASSIGN_ROLE"
     MANAGE_PERMISSIONS = "MANAGE_PERMISSIONS"
     VIEW_AUDIT_LOG = "VIEW_AUDIT_LOG"
@@ -81,6 +83,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.UPDATE_USER.value,
         Permission.BAN_USER.value,
         Permission.UNBAN_USER.value,
+        Permission.DELETE_USER.value,
+        Permission.RESTORE_USER.value,
         Permission.ASSIGN_ROLE.value,
         Permission.MANAGE_PERMISSIONS.value,
         Permission.VIEW_AUDIT_LOG.value,
