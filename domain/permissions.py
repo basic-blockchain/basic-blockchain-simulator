@@ -55,15 +55,17 @@ class Permission(str, Enum):
 
 # Role baselines — least-privilege by default.
 #
-# ADMIN owns user/role/permission management AND their own wallet ops, but
-# does NOT receive financial-action permissions (MINT, FREEZE_WALLET,
-# UNFREEZE_WALLET) or cross-user data visibility (VIEW_WALLETS,
-# VIEW_TRANSFERS) for free. To mint coin, freeze a wallet, or browse
-# someone else's history, an ADMIN must grant themselves the specific
-# permission through `POST /api/v1/admin/users/<self>/permissions`. This
-# leaves an explicit audit_log row for every elevation and prevents a
-# single compromised ADMIN session from instantly accessing the supply or
-# every user's financial history.
+# ADMIN owns user/role/permission management, wallet management ops
+# (VIEW_WALLETS, FREEZE_WALLET, UNFREEZE_WALLET), and their own wallet
+# ops. MINT and VIEW_TRANSFERS remain absent from the baseline: MINT
+# modifies the token supply and VIEW_TRANSFERS exposes all financial
+# history — both require an explicit per-admin grant via
+# `POST /api/v1/admin/users/<self>/permissions` which leaves an audit_log
+# row for every elevation.
+#
+# VIEW_WALLETS / FREEZE_WALLET / UNFREEZE_WALLET are included because they
+# are management operations (oversight, remediation) rather than supply-
+# mutating actions; the new admin wallet endpoints require them.
 #
 # OPERATOR is "audit-light": own wallet ops + cross-user read of wallets
 # and transfers. Useful for compliance / monitoring roles that need to
@@ -88,12 +90,15 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.ASSIGN_ROLE.value,
         Permission.MANAGE_PERMISSIONS.value,
         Permission.VIEW_AUDIT_LOG.value,
+        # Wallet management (oversight / remediation — not supply-mutating).
+        Permission.VIEW_WALLETS.value,
+        Permission.FREEZE_WALLET.value,
+        Permission.UNFREEZE_WALLET.value,
         # Own wallet ops — admins are users too.
         Permission.CREATE_WALLET.value,
         Permission.TRANSFER.value,
-        # NOTE: MINT, FREEZE_WALLET, UNFREEZE_WALLET, VIEW_WALLETS, and
-        # VIEW_TRANSFERS are deliberately absent. Grant them per-admin via
-        # `user_permissions` when an operational need arises.
+        # NOTE: MINT and VIEW_TRANSFERS are deliberately absent.
+        # Grant them per-admin via `user_permissions` when needed.
     },
     Role.OPERATOR.value: {
         Permission.CREATE_WALLET.value,
