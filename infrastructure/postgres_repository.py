@@ -12,7 +12,8 @@ from domain.models import Block, Transaction
 # and the Python-side grouping logic does not have to branch.
 _BLOCK_TX_SELECT = (
     "SELECT b.index, b.timestamp, b.proof, b.previous_hash, b.merkle_root, "
-    "       t.id, t.sender, t.receiver, t.amount "
+    "       t.id, t.sender, t.receiver, t.amount, "
+    "       t.sender_wallet_id, t.receiver_wallet_id, t.nonce, t.signature "
     "FROM blocks b "
     "LEFT JOIN transactions t ON t.block_index = b.index"
 )
@@ -45,7 +46,15 @@ def _rows_to_blocks(rows: list[tuple]) -> list[Block]:
         txs_by_index[block_index].append(
             (
                 int(tx_id),
-                Transaction(sender=row[6], receiver=row[7], amount=Decimal(row[8])),
+                Transaction(
+                    sender=row[6],
+                    receiver=row[7],
+                    amount=Decimal(row[8]),
+                    sender_wallet_id=row[9] or "",
+                    receiver_wallet_id=row[10] or "",
+                    nonce=int(row[11] or 0),
+                    signature=row[12] or "",
+                ),
             )
         )
     for block_index, indexed_txs in txs_by_index.items():
@@ -86,10 +95,22 @@ class PostgresBlockRepository:
             )
             if block.transactions:
                 cur.executemany(
-                    "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                    "VALUES (%s, %s, %s, %s)",
+                    ""
+                    "INSERT INTO transactions "
+                    "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                    "",
                     [
-                        (block.index, tx.sender, tx.receiver, tx.amount)
+                        (
+                            block.index,
+                            tx.sender,
+                            tx.receiver,
+                            tx.amount,
+                            tx.sender_wallet_id,
+                            tx.receiver_wallet_id,
+                            tx.nonce,
+                            tx.signature,
+                        )
                         for tx in block.transactions
                     ],
                 )
@@ -126,10 +147,22 @@ class PostgresBlockRepository:
                 )
                 if b.transactions:
                     cur.executemany(
-                        "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                        "VALUES (%s, %s, %s, %s)",
+                        ""
+                        "INSERT INTO transactions "
+                        "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                        "",
                         [
-                            (b.index, tx.sender, tx.receiver, tx.amount)
+                            (
+                                b.index,
+                                tx.sender,
+                                tx.receiver,
+                                tx.amount,
+                                tx.sender_wallet_id,
+                                tx.receiver_wallet_id,
+                                tx.nonce,
+                                tx.signature,
+                            )
                             for tx in b.transactions
                         ],
                     )
@@ -144,9 +177,24 @@ class PostgresBlockRepository:
             return
         with self._connect() as conn, conn.cursor() as cur:
             cur.executemany(
-                "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                "VALUES (%s, %s, %s, %s)",
-                [(block_index, tx.sender, tx.receiver, tx.amount) for tx in txs],
+                ""
+                "INSERT INTO transactions "
+                "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                "",
+                [
+                    (
+                        block_index,
+                        tx.sender,
+                        tx.receiver,
+                        tx.amount,
+                        tx.sender_wallet_id,
+                        tx.receiver_wallet_id,
+                        tx.nonce,
+                        tx.signature,
+                    )
+                    for tx in txs
+                ],
             )
 
     def get_confirmed_transactions(self) -> list[dict[str, object]]:
