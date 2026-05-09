@@ -309,6 +309,116 @@ async def test_bootstrap_admin_promotes_first_user_when_username_matches(monkeyp
         assert body["roles"] == [Role.ADMIN.value]
 
 
+# ── PATCH /auth/me — Gap #6 self-service profile update ─────────────────
+
+
+async def test_patch_me_updates_display_name():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="alice")
+        r = await _login(client, username="alice", password="hunter12345")
+        token = (await r.get_json())["access_token"]
+
+        r = await client.patch(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"display_name": "Alice Wonderland"},
+        )
+        body = await r.get_json()
+        assert r.status_code == 200, body
+        assert body["display_name"] == "Alice Wonderland"
+        assert body["username"] == "alice"
+
+        # Confirm GET /auth/me reflects the change.
+        r = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = await r.get_json()
+        assert me["display_name"] == "Alice Wonderland"
+
+
+async def test_patch_me_updates_username_and_subsequent_lookup():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="alice")
+        r = await _login(client, username="alice", password="hunter12345")
+        token = (await r.get_json())["access_token"]
+
+        r = await client.patch(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"username": "alice2"},
+        )
+        body = await r.get_json()
+        assert r.status_code == 200, body
+        assert body["username"] == "alice2"
+
+        # The JWT still references the same user_id, so /auth/me works
+        # and reports the new username.
+        r = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = await r.get_json()
+        assert me["username"] == "alice2"
+
+
+async def test_patch_me_email_already_in_use_returns_email_taken():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        # Register two users; second tries to claim the first's email.
+        await _register_and_activate(client, username="alice")
+        await _register_and_activate(client, username="bob")
+        r = await _login(client, username="bob", password="hunter12345")
+        token = (await r.get_json())["access_token"]
+
+        r = await client.patch(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"email": "alice@x.com"},
+        )
+        body = await r.get_json()
+        assert r.status_code == 400
+        assert body["code"] == "EMAIL_TAKEN"
+
+
+async def test_patch_me_username_taken_returns_username_taken():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="alice")
+        await _register_and_activate(client, username="bob")
+        r = await _login(client, username="bob", password="hunter12345")
+        token = (await r.get_json())["access_token"]
+
+        r = await client.patch(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"username": "alice"},
+        )
+        body = await r.get_json()
+        assert r.status_code == 400
+        assert body["code"] == "USERNAME_TAKEN"
+
+
+async def test_patch_me_without_token_returns_401():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        r = await client.patch("/api/v1/auth/me", json={"display_name": "Nope"})
+        assert r.status_code == 401
+
+
+async def test_patch_me_with_no_fields_returns_validation_error():
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="alice")
+        r = await _login(client, username="alice", password="hunter12345")
+        token = (await r.get_json())["access_token"]
+
+        r = await client.patch(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+        body = await r.get_json()
+        assert r.status_code == 400
+        assert body["code"] == "VALIDATION_ERROR"
+
+
 async def test_bootstrap_admin_does_not_promote_non_first_user(monkeypatch):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
     import importlib
