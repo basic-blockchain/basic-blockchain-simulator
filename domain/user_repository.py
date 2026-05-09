@@ -121,7 +121,14 @@ class UserRepositoryProtocol(Protocol):
         details: dict[str, object] | None = None,
     ) -> None: ...
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]: ...
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]: ...
 
 
 class InMemoryUserStore:
@@ -329,5 +336,19 @@ class InMemoryUserStore:
             )
         )
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
-        return list(reversed(self._audit[-limit:]))
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]:
+        entries = list(reversed(self._audit))
+        if action:
+            entries = [e for e in entries if e.action == action]
+        if actor_id:
+            entries = [e for e in entries if e.actor_id == actor_id]
+        if target_id:
+            entries = [e for e in entries if e.target_id == target_id]
+        return entries[:limit]
