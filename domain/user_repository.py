@@ -73,6 +73,14 @@ class UserRepositoryProtocol(Protocol):
 
     def activate_credentials(self, *, user_id: str, password_hash: str) -> None: ...
 
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None: ...
+
     def assign_role(self, *, user_id: str, role: str) -> None: ...
 
     def revoke_role(self, *, user_id: str, role: str) -> None: ...
@@ -205,6 +213,24 @@ class InMemoryUserStore:
             activation_code=None,
             activated_at="now",  # InMemory uses sentinel; PG uses now()
             must_change_password=False,
+        )
+
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None:
+        cred = self._creds.get(user_id)
+        if cred is None:
+            raise KeyError(user_id)
+        self._creds[user_id] = CredentialsRecord(
+            user_id=user_id,
+            password_hash=password_hash,
+            activation_code=None,
+            activated_at=cred.activated_at or "now",
+            must_change_password=must_change_password,
         )
 
     def assign_role(self, *, user_id: str, role: str) -> None:
