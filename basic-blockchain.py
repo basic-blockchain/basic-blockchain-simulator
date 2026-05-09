@@ -330,7 +330,9 @@ def create_app(
         role_overrides=user_store.get_role_overrides,
         user_overrides=user_store.get_user_overrides,
     )
-    admin_bp = build_admin_blueprint(users=user_store, wallets=wallet_store)
+    admin_bp = build_admin_blueprint(
+        users=user_store, wallets=wallet_store, bcrypt_rounds=BCRYPT_ROUNDS
+    )
     api_v1.register_blueprint(admin_bp)
 
     # Phase I.3: wallet endpoints (create, list-mine, signed transfer,

@@ -18,6 +18,7 @@ from domain.audit import (
     ACTION_PERMISSION_REVOKED,
     ACTION_ROLE_GRANTED,
     ACTION_ROLE_REVOKED,
+    ACTION_TEMP_PASSWORD_ISSUED,
     ACTION_USER_BANNED,
     ACTION_USER_DELETED,
     ACTION_USER_RESTORED,
@@ -26,7 +27,7 @@ from domain.audit import (
     ACTION_WALLET_FROZEN,
     ACTION_WALLET_UNFROZEN,
 )
-from domain.auth import Role
+from domain.auth import Role, generate_temp_password, hash_password
 from domain.permissions import Permission
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
 from domain.wallet_repository import WalletRepositoryProtocol
@@ -40,6 +41,7 @@ def build_admin_blueprint(
     *,
     users: UserRepositoryProtocol,
     wallets: WalletRepositoryProtocol,
+    bcrypt_rounds: int = 12,
 ) -> Blueprint:
     """Return the `/admin` blueprint bound to a user + wallet repository.
 
@@ -274,6 +276,42 @@ def build_admin_blueprint(
                     "user_id": user_id,
                     "display_name": updated.display_name if updated else None,
                     "email": updated.email if updated else None,
+                }
+            ),
+            200,
+        )
+
+    # ── POST /admin/users/<user_id>/temp-password ────────────────────────────
+
+    @bp.route("/users/<user_id>/temp-password", methods=["POST"])
+    @require_permission(Permission.UPDATE_USER)
+    async def issue_temp_password(user_id: str):
+        actor = require_auth()
+        target = users.get_user_by_id(user_id)
+        if target is None:
+            return bad_request("User not found", "USER_NOT_FOUND")
+        if target.deleted_at:
+            return bad_request(
+                "Cannot issue temp password for a deleted user", "USER_DELETED"
+            )
+        temp = generate_temp_password()
+        users.set_password(
+            user_id=user_id,
+            password_hash=hash_password(temp, rounds=bcrypt_rounds),
+            must_change_password=True,
+        )
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_TEMP_PASSWORD_ISSUED,
+            target_id=user_id,
+            details={},
+        )
+        return (
+            jsonify(
+                {
+                    "user_id": user_id,
+                    "temp_password": temp,
+                    "must_change_password": True,
                 }
             ),
             200,
