@@ -117,12 +117,17 @@ class PostgresUserStore:
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None:
-        # Build SET clause dynamically so callers can update either field
-        # in isolation. `updated_at = now()` is always touched so the row
-        # carries an audit trail of the most recent admin edit.
+        # Build SET clause dynamically so callers can update any subset
+        # of (username, display_name, email) in isolation. `updated_at =
+        # now()` is always touched so the row carries an audit trail of
+        # the most recent edit (admin or self-service — Gap #6).
         sets: list[str] = []
         params: list[object] = []
+        if username is not None:
+            sets.append("username = %s")
+            params.append(username)
         if display_name is not None:
             sets.append("display_name = %s")
             params.append(display_name)
@@ -143,6 +148,8 @@ class PostgresUserStore:
                     raise KeyError(user_id)
         except psycopg2.errors.UniqueViolation as exc:
             constraint = (exc.diag.constraint_name or "").lower()
+            if "username" in constraint:
+                raise UsernameTakenError(username or "") from exc
             if "email" in constraint:
                 raise EmailTakenError(email or "") from exc
             raise
