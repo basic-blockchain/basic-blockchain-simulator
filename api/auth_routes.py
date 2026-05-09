@@ -153,11 +153,18 @@ def build_auth_blueprint(
         if not isinstance(data, dict):
             return bad_request("JSON body required", "VALIDATION_ERROR")
         username = (data.get("username") or "").strip()
+        user_id_field = (data.get("user_id") or "").strip()
         password = data.get("password")
-        if not username or not isinstance(password, str):
-            return bad_request("username and password are required", "VALIDATION_ERROR")
+        if (not username and not user_id_field) or not isinstance(password, str):
+            return bad_request("username (or user_id) and password are required", "VALIDATION_ERROR")
 
-        user = users.get_user_by_username(username)
+        # Resolve identity: username takes precedence; user_id is the fallback.
+        # Both paths return the same opaque error so the endpoint cannot be
+        # used to enumerate valid identifiers. (BR-AU-03 + BR-RB-04.)
+        if username:
+            user = users.get_user_by_username(username)
+        else:
+            user = users.get_user_by_id(user_id_field)
         cred = users.get_credentials(user.user_id) if user else None
         if user is None or cred is None or not cred.password_hash:
             # Same response for missing user / not-yet-activated / wrong
