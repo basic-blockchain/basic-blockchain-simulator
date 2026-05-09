@@ -204,7 +204,15 @@ def build_admin_blueprint(
         except ValueError:
             return bad_request("limit must be an integer", "VALIDATION_ERROR")
         limit = max(1, min(limit, 200))
-        entries = users.recent_audit(limit=limit)
+        action_filter = request.args.get("action") or None
+        actor_filter = request.args.get("actor_id") or None
+        target_filter = request.args.get("target_id") or None
+        entries = users.recent_audit(
+            limit=limit,
+            action=action_filter,
+            actor_id=actor_filter,
+            target_id=target_filter,
+        )
         return (
             jsonify(
                 {
@@ -220,6 +228,11 @@ def build_admin_blueprint(
                         for e in entries
                     ],
                     "count": len(entries),
+                    "filters": {
+                        "action": action_filter,
+                        "actor_id": actor_filter,
+                        "target_id": target_filter,
+                    },
                 }
             ),
             200,

@@ -271,12 +271,32 @@ class PostgresUserStore:
                 (actor_id, action, target_id, Json(details or {})),
             )
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if action:
+            conditions.append("action = %s")
+            params.append(action)
+        if actor_id:
+            conditions.append("actor_id = %s")
+            params.append(actor_id)
+        if target_id:
+            conditions.append("target_id = %s")
+            params.append(target_id)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        params.append(limit)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT id, actor_id, action, target_id, details, created_at "
-                "FROM audit_log ORDER BY id DESC LIMIT %s",
-                (limit,),
+                f"SELECT id, actor_id, action, target_id, details, created_at "
+                f"FROM audit_log{where} ORDER BY id DESC LIMIT %s",
+                params,
             )
             rows = cur.fetchall()
         return [
