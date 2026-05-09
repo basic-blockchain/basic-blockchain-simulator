@@ -196,6 +196,24 @@ class PostgresUserStore:
                 (password_hash, user_id),
             )
 
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE user_credentials "
+                "SET password_hash = %s, must_change_password = %s, "
+                "    activation_code = NULL, updated_at = now() "
+                "WHERE user_id = %s",
+                (password_hash, must_change_password, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
     # ── Roles ─────────────────────────────────────────────────────────
 
     def assign_role(self, *, user_id: str, role: str) -> None:
