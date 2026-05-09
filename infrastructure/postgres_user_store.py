@@ -254,6 +254,21 @@ class PostgresUserStore:
                 (user_id, permission),
             )
 
+    def grant_role_permission(self, *, role: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO role_permissions (role, permission_id) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (role, permission),
+            )
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM role_permissions WHERE role = %s AND permission_id = %s",
+                (role, permission),
+            )
+
     # ── Audit log (Phase I.2) ─────────────────────────────────────
 
     def append_audit(
