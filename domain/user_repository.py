@@ -96,6 +96,7 @@ class UserRepositoryProtocol(Protocol):
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None: ...
 
     # Permission overrides (Phase I.2)
@@ -271,21 +272,35 @@ class InMemoryUserStore:
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None:
         rec = self._users.get(user_id)
         if rec is None:
             raise KeyError(user_id)
+        # Email index — keep in sync so future username/email lookups
+        # remain consistent after profile edits. Mirrors the UNIQUE
+        # constraint on `users.email` in PostgreSQL so both adapters
+        # raise the same domain error.
         new_email = rec.email if email is None else email
-        # Keep the email index in sync so future username/email lookups
-        # remain consistent after profile edits.
         if email is not None and email != rec.email:
+            if email and email in self._by_email:
+                raise EmailTakenError(email)
             if rec.email and rec.email in self._by_email:
                 del self._by_email[rec.email]
             if email:
                 self._by_email[email] = user_id
+        # Username index — Gap #6: self-service profile updates allow
+        # users to rename themselves. Reject conflicts up-front so the
+        # contract matches `create_user`.
+        new_username = rec.username if username is None else username
+        if username is not None and username != rec.username:
+            if username in self._by_username:
+                raise UsernameTakenError(username)
+            del self._by_username[rec.username]
+            self._by_username[username] = user_id
         self._users[user_id] = UserRecord(
             user_id=rec.user_id,
-            username=rec.username,
+            username=new_username,
             display_name=display_name if display_name is not None else rec.display_name,
             email=new_email,
             banned=rec.banned,
