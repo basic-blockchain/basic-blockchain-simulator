@@ -17,6 +17,8 @@ from domain.audit import (
     ACTION_PERMISSION_GRANTED,
     ACTION_PERMISSION_REVOKED,
     ACTION_ROLE_GRANTED,
+    ACTION_ROLE_PERMISSION_GRANTED,
+    ACTION_ROLE_PERMISSION_REVOKED,
     ACTION_ROLE_REVOKED,
     ACTION_USER_BANNED,
     ACTION_USER_DELETED,
@@ -27,7 +29,7 @@ from domain.audit import (
     ACTION_WALLET_UNFROZEN,
 )
 from domain.auth import Role
-from domain.permissions import Permission
+from domain.permissions import Permission, effective_permissions
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
 from domain.wallet_repository import WalletRepositoryProtocol
 
@@ -188,6 +190,66 @@ def build_admin_blueprint(
                 {
                     "user_id": user_id,
                     "permissions": sorted(users.get_user_overrides(user_id)),
+                    "action": audit_action,
+                }
+            ),
+            200,
+        )
+
+    # ── GET /admin/roles ─────────────────────────────────────────────
+
+    @bp.route("/roles", methods=["GET"])
+    @require_permission(Permission.MANAGE_PERMISSIONS)
+    async def list_roles():
+        role_overrides = users.get_role_overrides()
+        result: dict[str, list[str]] = {}
+        for role in _VALID_ROLES:
+            result[role] = sorted(
+                effective_permissions(role=role, role_overrides=role_overrides)
+            )
+        return jsonify({"roles": result}), 200
+
+    # ── POST /admin/roles/<role>/permissions ─────────────────────────
+
+    @bp.route("/roles/<role>/permissions", methods=["POST"])
+    @require_permission(Permission.MANAGE_PERMISSIONS)
+    async def manage_role_permission(role: str):
+        actor = require_auth()
+        if role not in _VALID_ROLES:
+            return bad_request(
+                f"role must be one of {sorted(_VALID_ROLES)}", "VALIDATION_ERROR"
+            )
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        action = (data.get("action") or "").lower()
+        permission = (data.get("permission") or "").upper()
+        if action not in {"grant", "revoke"}:
+            return bad_request("action must be 'grant' or 'revoke'", "VALIDATION_ERROR")
+        if permission not in _VALID_PERMISSIONS:
+            return bad_request("Unknown permission", "VALIDATION_ERROR")
+
+        if action == "grant":
+            users.grant_role_permission(role=role, permission=permission)
+            audit_action = ACTION_ROLE_PERMISSION_GRANTED
+        else:
+            users.revoke_role_permission(role=role, permission=permission)
+            audit_action = ACTION_ROLE_PERMISSION_REVOKED
+
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=audit_action,
+            target_id=None,
+            details={"role": role, "permission": permission},
+        )
+        role_overrides = users.get_role_overrides()
+        return (
+            jsonify(
+                {
+                    "role": role,
+                    "permissions": sorted(
+                        effective_permissions(role=role, role_overrides=role_overrides)
+                    ),
                     "action": audit_action,
                 }
             ),

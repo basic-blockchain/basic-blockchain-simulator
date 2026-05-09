@@ -430,3 +430,107 @@ async def test_admin_endpoints_validate_unknown_user(monkeypatch):
         )
         assert r.status_code == 400
         assert (await r.get_json())["code"] == "USER_NOT_FOUND"
+
+
+# ── Role-level permission overrides (Gap #16) ───────────────────────────
+
+
+async def test_admin_can_list_role_permissions(monkeypatch):
+    """`GET /admin/roles` returns the effective permission set for every
+    known role. With no overrides the listing matches `ROLE_PERMISSIONS`."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+        r = await client.get(
+            "/api/v1/admin/roles", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        body = await r.get_json()
+        roles = body["roles"]
+        for role_name, baseline in ROLE_PERMISSIONS.items():
+            assert role_name in roles
+            assert sorted(baseline) == roles[role_name]
+
+
+async def test_admin_can_grant_and_revoke_role_permission(monkeypatch):
+    """Granting VIEW_USERS to VIEWER appears in the role listing; revoking
+    it removes the override (effective set returns to the baseline)."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+
+        # Grant
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 200, await r.get_json()
+        body = await r.get_json()
+        assert body["role"] == "VIEWER"
+        assert body["action"] == "ROLE_PERMISSION_GRANTED"
+        assert "VIEW_USERS" in body["permissions"]
+
+        # GET /admin/roles reflects the override
+        r = await client.get(
+            "/api/v1/admin/roles", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        roles = (await r.get_json())["roles"]
+        assert "VIEW_USERS" in roles["VIEWER"]
+
+        # Revoke
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "revoke", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 200
+        body = await r.get_json()
+        assert body["action"] == "ROLE_PERMISSION_REVOKED"
+        assert "VIEW_USERS" not in body["permissions"]
+
+
+async def test_role_permission_endpoint_validates_role_and_permission(monkeypatch):
+    """Both the role path-parameter and the permission body field are
+    validated against the known sets; unknown values yield 400 with code
+    VALIDATION_ERROR."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+
+        # Unknown role
+        r = await client.post(
+            "/api/v1/admin/roles/WIZARD/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "VALIDATION_ERROR"
+
+        # Unknown permission
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "WALK_THE_DOG"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "VALIDATION_ERROR"

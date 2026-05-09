@@ -107,6 +107,10 @@ class UserRepositoryProtocol(Protocol):
 
     def revoke_user_permission(self, *, user_id: str, permission: str) -> None: ...
 
+    def grant_role_permission(self, *, role: str, permission: str) -> None: ...
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None: ...
+
     # Audit log (Phase I.2)
     def append_audit(
         self,
@@ -295,6 +299,13 @@ class InMemoryUserStore:
     def revoke_user_permission(self, *, user_id: str, permission: str) -> None:
         if user_id in self._user_overrides:
             self._user_overrides[user_id].discard(permission)
+
+    def grant_role_permission(self, *, role: str, permission: str) -> None:
+        self._role_overrides.setdefault(role, set()).add(permission)
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None:
+        if role in self._role_overrides:
+            self._role_overrides[role].discard(permission)
 
     # ── Audit log ──────────────────────────────────────────────────
 
