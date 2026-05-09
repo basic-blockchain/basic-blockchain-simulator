@@ -435,3 +435,183 @@ async def test_bootstrap_admin_does_not_promote_non_first_user(monkeypatch):
         r = await _login(client, username="alice", password="hunter12345")
         body = await r.get_json()
         assert body["roles"] == [Role.VIEWER.value]
+
+
+# ── Gap #3: temp password + force-change flow ───────────────────────────
+
+
+async def _admin_login_token(client):
+    """Bootstrap an ADMIN (`alice`) and return its access token."""
+    await _register_and_activate(client, username="alice")
+    r = await _login(client, username="alice", password="hunter12345")
+    return (await r.get_json())["access_token"]
+
+
+async def test_login_includes_must_change_password_false_for_normal_user(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="alice")
+        r = await _login(client, username="alice", password="hunter12345")
+        body = await r.get_json()
+        assert r.status_code == 200
+        assert body["must_change_password"] is False
+
+
+async def test_admin_can_issue_temp_password(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        admin_token = await _admin_login_token(client)
+        bob_id = await _register_and_activate(client, username="bob")
+        r = await client.post(
+            f"/api/v1/admin/users/{bob_id}/temp-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        body = await r.get_json()
+        assert r.status_code == 200, body
+        assert body["user_id"] == bob_id
+        assert body["must_change_password"] is True
+        assert isinstance(body["temp_password"], str)
+        assert len(body["temp_password"]) == 16
+        assert body["temp_password"].isalnum()
+
+
+async def test_admin_temp_password_rejects_unknown_user(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        admin_token = await _admin_login_token(client)
+        r = await client.post(
+            "/api/v1/admin/users/does-not-exist/temp-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "USER_NOT_FOUND"
+
+
+async def test_login_with_temp_password_signals_must_change(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        admin_token = await _admin_login_token(client)
+        bob_id = await _register_and_activate(client, username="bob")
+        r = await client.post(
+            f"/api/v1/admin/users/{bob_id}/temp-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        temp = (await r.get_json())["temp_password"]
+        # The previous password must no longer work — set_password
+        # replaced the hash atomically.
+        r = await _login(client, username="bob", password="hunter12345")
+        assert r.status_code == 400
+        # Now log in with the temp password and confirm the flag.
+        r = await _login(client, username="bob", password=temp)
+        body = await r.get_json()
+        assert r.status_code == 200, body
+        assert body["must_change_password"] is True
+        assert "access_token" in body
+
+
+async def test_change_password_succeeds_and_clears_must_change(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        admin_token = await _admin_login_token(client)
+        bob_id = await _register_and_activate(client, username="bob")
+        r = await client.post(
+            f"/api/v1/admin/users/{bob_id}/temp-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        temp = (await r.get_json())["temp_password"]
+
+        r = await _login(client, username="bob", password=temp)
+        bob_token = (await r.get_json())["access_token"]
+
+        r = await client.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {bob_token}"},
+            json={"current_password": temp, "new_password": "brand-new-pw-9999"},
+        )
+        assert r.status_code == 200, await r.get_json()
+
+        # Next login must use the new password and clear the flag.
+        r = await _login(client, username="bob", password="brand-new-pw-9999")
+        body = await r.get_json()
+        assert r.status_code == 200
+        assert body["must_change_password"] is False
+
+
+async def test_change_password_rejects_wrong_current(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="bob")
+        r = await _login(client, username="bob", password="hunter12345")
+        bob_token = (await r.get_json())["access_token"]
+
+        r = await client.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {bob_token}"},
+            json={
+                "current_password": "wrong-password",
+                "new_password": "another-strong-pw",
+            },
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "AUTH_INVALID_CREDENTIALS"
+
+
+async def test_change_password_rejects_short_new(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_and_activate(client, username="bob")
+        r = await _login(client, username="bob", password="hunter12345")
+        bob_token = (await r.get_json())["access_token"]
+
+        r = await client.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {bob_token}"},
+            json={"current_password": "hunter12345", "new_password": "short"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "VALIDATION_ERROR"
+
+
+async def test_change_password_requires_authentication(monkeypatch):
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        r = await client.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": "x", "new_password": "12345678"},
+        )
+        assert r.status_code == 401

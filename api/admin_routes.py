@@ -8,18 +8,25 @@ be present (or granted by override).
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from quart import Blueprint, jsonify, request
 
 from api.auth_middleware import require_auth
 from api.errors import bad_request
 from api.permissions import require_permission
+from api.schemas import parse_currency_code
 from domain.audit import (
+    ACTION_CURRENCY_CREATED,
+    ACTION_EXCHANGE_RATE_SET,
     ACTION_PERMISSION_GRANTED,
     ACTION_PERMISSION_REVOKED,
     ACTION_ROLE_GRANTED,
     ACTION_ROLE_PERMISSION_GRANTED,
     ACTION_ROLE_PERMISSION_REVOKED,
     ACTION_ROLE_REVOKED,
+    ACTION_TEMP_PASSWORD_ISSUED,
+    ACTION_TREASURY_WALLET_CREATED,
     ACTION_USER_BANNED,
     ACTION_USER_DELETED,
     ACTION_USER_RESTORED,
@@ -28,11 +35,15 @@ from domain.audit import (
     ACTION_WALLET_FROZEN,
     ACTION_WALLET_UNFROZEN,
 )
-from domain.auth import Role
+from domain.auth import Role, generate_temp_password, hash_password
+from domain.currency_repository import CurrencyAlreadyExistsError, CurrencyRepositoryProtocol
 from domain.permissions import Permission, effective_permissions
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
-from domain.wallet_repository import WalletRepositoryProtocol
+from domain.wallet import WalletService
+from domain.wallet_repository import WalletRepositoryProtocol, WalletType
 
+
+SYSTEM_USER_ID = "SYSTEM"
 
 _VALID_ROLES = {r.value for r in Role}
 _VALID_PERMISSIONS = {p.value for p in Permission}
@@ -42,6 +53,8 @@ def build_admin_blueprint(
     *,
     users: UserRepositoryProtocol,
     wallets: WalletRepositoryProtocol,
+    currencies: CurrencyRepositoryProtocol,
+    bcrypt_rounds: int = 12,
 ) -> Blueprint:
     """Return the `/admin` blueprint bound to a user + wallet repository.
 
@@ -50,6 +63,7 @@ def build_admin_blueprint(
     persistence layer directly.
     """
     bp = Blueprint("admin", __name__, url_prefix="/admin")
+    wallet_svc = WalletService(wallets)
 
     # ── GET /admin/users ─────────────────────────────────────────────
 
@@ -58,6 +72,8 @@ def build_admin_blueprint(
     async def list_users():
         out = []
         for record in users.list_users():
+            if record.user_id == SYSTEM_USER_ID:
+                continue
             out.append(
                 {
                     "user_id": record.user_id,
@@ -354,6 +370,42 @@ def build_admin_blueprint(
             200,
         )
 
+    # ── POST /admin/users/<user_id>/temp-password ────────────────────────────
+
+    @bp.route("/users/<user_id>/temp-password", methods=["POST"])
+    @require_permission(Permission.UPDATE_USER)
+    async def issue_temp_password(user_id: str):
+        actor = require_auth()
+        target = users.get_user_by_id(user_id)
+        if target is None:
+            return bad_request("User not found", "USER_NOT_FOUND")
+        if target.deleted_at:
+            return bad_request(
+                "Cannot issue temp password for a deleted user", "USER_DELETED"
+            )
+        temp = generate_temp_password()
+        users.set_password(
+            user_id=user_id,
+            password_hash=hash_password(temp, rounds=bcrypt_rounds),
+            must_change_password=True,
+        )
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_TEMP_PASSWORD_ISSUED,
+            target_id=user_id,
+            details={},
+        )
+        return (
+            jsonify(
+                {
+                    "user_id": user_id,
+                    "temp_password": temp,
+                    "must_change_password": True,
+                }
+            ),
+            200,
+        )
+
     # ── DELETE /admin/users/<user_id> (soft-delete) ──────────────────
 
     @bp.route("/users/<user_id>", methods=["DELETE"])
@@ -443,6 +495,7 @@ def build_admin_blueprint(
                             "username": w.username,
                             "display_name": w.display_name,
                             "currency": w.currency,
+                            "wallet_type": w.wallet_type,
                             "balance": str(w.balance),
                             "public_key": w.public_key,
                             "frozen": w.frozen,
@@ -490,5 +543,252 @@ def build_admin_blueprint(
             details={"user_id": wallet.user_id},
         )
         return jsonify({"wallet_id": wallet_id, "frozen": False}), 200
+
+    # ── POST /admin/wallets/<wallet_id>/top-up ──────────────────────
+
+    @bp.route("/wallets/<wallet_id>/top-up", methods=["POST"])
+    @require_permission(Permission.CREATE_TREASURY_WALLET)
+    async def top_up_wallet(wallet_id: str):
+        require_auth()
+        return (
+            jsonify(
+                {
+                    "message": "Treasury top-up is not available yet. See MC-5 in the roadmap.",
+                    "wallet_id": wallet_id,
+                }
+            ),
+            501,
+        )
+
+    # ── GET /admin/currencies ───────────────────────────────────────
+
+    @bp.route("/currencies", methods=["GET"])
+    @require_permission(Permission.CREATE_CURRENCY)
+    async def list_currencies():
+        active_only = request.args.get("active", "false").lower() == "true"
+        records = currencies.list_currencies(active_only=active_only)
+        return (
+            jsonify(
+                {
+                    "currencies": [
+                        {
+                            "code": c.code,
+                            "name": c.name,
+                            "decimals": c.decimals,
+                            "active": c.active,
+                        }
+                        for c in records
+                    ],
+                    "count": len(records),
+                }
+            ),
+            200,
+        )
+
+    # ── POST /admin/currencies ──────────────────────────────────────
+
+    @bp.route("/currencies", methods=["POST"])
+    @require_permission(Permission.CREATE_CURRENCY)
+    async def create_currency():
+        actor = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        try:
+            raw_code = data.get("code")
+            if raw_code is None or str(raw_code).strip() == "":
+                return bad_request("'code' is required", "VALIDATION_ERROR")
+            code = parse_currency_code(raw_code)
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return bad_request("'name' is required", "VALIDATION_ERROR")
+        decimals_raw = data.get("decimals", 8)
+        if not isinstance(decimals_raw, int) or isinstance(decimals_raw, bool):
+            return bad_request("'decimals' must be an integer", "VALIDATION_ERROR")
+        if decimals_raw < 0 or decimals_raw > 18:
+            return bad_request("'decimals' must be between 0 and 18", "VALIDATION_ERROR")
+        active = bool(data.get("active", True))
+        try:
+            currencies.create_currency(
+                code=code,
+                name=name,
+                decimals=decimals_raw,
+                active=active,
+            )
+        except CurrencyAlreadyExistsError:
+            return bad_request("Currency already exists", "CURRENCY_EXISTS")
+
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_CURRENCY_CREATED,
+            target_id=code,
+            details={"name": name, "decimals": decimals_raw, "active": active},
+        )
+        return (
+            jsonify({"code": code, "name": name, "decimals": decimals_raw, "active": active}),
+            201,
+        )
+
+    # ── POST /admin/treasury ────────────────────────────────────────
+
+    @bp.route("/treasury", methods=["POST"])
+    @require_permission(Permission.CREATE_TREASURY_WALLET)
+    async def create_treasury_wallet():
+        actor = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        try:
+            currency = parse_currency_code(data.get("currency"))
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        record = currencies.get_currency(currency)
+        if record is None:
+            return bad_request("Currency not found", "CURRENCY_NOT_FOUND")
+        if not record.active:
+            return bad_request("Currency is not active", "CURRENCY_INACTIVE")
+
+        existing = wallets.find_wallet_by_type_currency(
+            wallet_type=WalletType.TREASURY.value,
+            currency=currency,
+        )
+        if existing is not None:
+            return bad_request("Treasury wallet already exists", "TREASURY_EXISTS")
+
+        created = wallet_svc.create_wallet(
+            user_id=SYSTEM_USER_ID,
+            currency=currency,
+            wallet_type=WalletType.TREASURY.value,
+        )
+
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_TREASURY_WALLET_CREATED,
+            target_id=created.wallet_id,
+            details={"currency": currency},
+        )
+        return (
+            jsonify(
+                {
+                    "wallet_id": created.wallet_id,
+                    "public_key": created.public_key,
+                    "currency": currency,
+                    "wallet_type": WalletType.TREASURY.value,
+                }
+            ),
+            201,
+        )
+
+    # ── GET /admin/exchange-rates ───────────────────────────────────
+
+    @bp.route("/exchange-rates", methods=["GET"])
+    @require_permission(Permission.MANAGE_EXCHANGE_RATES)
+    async def list_exchange_rates():
+        from_currency = request.args.get("from") or None
+        to_currency = request.args.get("to") or None
+        try:
+            limit = int(request.args.get("limit", "50"))
+        except ValueError:
+            return bad_request("limit must be an integer", "VALIDATION_ERROR")
+        limit = max(1, min(limit, 200))
+
+        if from_currency:
+            try:
+                from_currency = parse_currency_code(from_currency)
+            except ValueError as exc:
+                return bad_request(str(exc), "VALIDATION_ERROR")
+        if to_currency:
+            try:
+                to_currency = parse_currency_code(to_currency)
+            except ValueError as exc:
+                return bad_request(str(exc), "VALIDATION_ERROR")
+
+        records = currencies.list_exchange_rates(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            limit=limit,
+        )
+        return (
+            jsonify(
+                {
+                    "rates": [
+                        {
+                            "rate_id": r.rate_id,
+                            "from_currency": r.from_currency,
+                            "to_currency": r.to_currency,
+                            "rate": str(r.rate),
+                            "fee_rate": str(r.fee_rate),
+                            "updated_at": r.updated_at,
+                        }
+                        for r in records
+                    ],
+                    "count": len(records),
+                }
+            ),
+            200,
+        )
+
+    # ── PUT /admin/exchange-rates/<from>/<to> ───────────────────────
+
+    @bp.route("/exchange-rates/<from_code>/<to_code>", methods=["PUT"])
+    @require_permission(Permission.MANAGE_EXCHANGE_RATES)
+    async def set_exchange_rate(from_code: str, to_code: str):
+        actor = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        try:
+            from_currency = parse_currency_code(from_code)
+            to_currency = parse_currency_code(to_code)
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        if from_currency == to_currency:
+            return bad_request("Currencies must differ", "VALIDATION_ERROR")
+
+        if currencies.get_currency(from_currency) is None or currencies.get_currency(to_currency) is None:
+            return bad_request("Currency not found", "CURRENCY_NOT_FOUND")
+
+        try:
+            rate = Decimal(str(data.get("rate", "")))
+        except Exception:  # noqa: BLE001
+            return bad_request("'rate' must be a number", "VALIDATION_ERROR")
+        try:
+            fee_rate = Decimal(str(data.get("fee_rate", "0")))
+        except Exception:  # noqa: BLE001
+            return bad_request("'fee_rate' must be a number", "VALIDATION_ERROR")
+        if rate <= 0:
+            return bad_request("'rate' must be positive", "VALIDATION_ERROR")
+        if fee_rate < 0 or fee_rate > 1:
+            return bad_request("'fee_rate' must be between 0 and 1", "VALIDATION_ERROR")
+
+        record = currencies.set_exchange_rate(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            rate=rate,
+            fee_rate=fee_rate,
+        )
+
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_EXCHANGE_RATE_SET,
+            target_id=f"{from_currency}:{to_currency}",
+            details={"rate": str(rate), "fee_rate": str(fee_rate)},
+        )
+
+        return (
+            jsonify(
+                {
+                    "rate_id": record.rate_id,
+                    "from_currency": record.from_currency,
+                    "to_currency": record.to_currency,
+                    "rate": str(record.rate),
+                    "fee_rate": str(record.fee_rate),
+                    "updated_at": record.updated_at,
+                }
+            ),
+            201,
+        )
 
     return bp
