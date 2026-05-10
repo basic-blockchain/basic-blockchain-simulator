@@ -18,6 +18,7 @@ from quart import Blueprint, jsonify, request
 
 from api.auth_middleware import require_auth
 from api.errors import bad_request
+from domain.audit import ACTION_PASSWORD_CHANGED
 from domain.audit import ACTION_USER_SELF_UPDATED
 from domain.auth import (
     DEFAULT_ROLE,
@@ -179,6 +180,10 @@ def build_auth_blueprint(
             algorithm=jwt_algorithm,
             ttl_seconds=jwt_ttl_seconds,
         )
+        # When must_change_password is set, we still hand out a JWT — but
+        # the client is expected to redirect to the change-password screen
+        # before doing anything else. The flag is the signal; clients that
+        # ignore it will keep working but the obligation persists in the DB.
         return (
             jsonify(
                 {
@@ -188,10 +193,50 @@ def build_auth_blueprint(
                     "user_id": user.user_id,
                     "username": user.username,
                     "roles": roles,
+                    "must_change_password": cred.must_change_password,
                 }
             ),
             200,
         )
+
+    # ── POST /auth/change-password ───────────────────────────────────
+
+    @bp.route("/change-password", methods=["POST"])
+    async def change_password():
+        current = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        current_password = data.get("current_password")
+        new_password = data.get("new_password")
+        if not isinstance(current_password, str) or not isinstance(new_password, str):
+            return bad_request(
+                "current_password and new_password are required",
+                "VALIDATION_ERROR",
+            )
+        if len(new_password) < 8:
+            return bad_request(
+                "New password must be at least 8 characters", "VALIDATION_ERROR"
+            )
+
+        cred = users.get_credentials(current.user_id)
+        if cred is None or not verify_password(current_password, cred.password_hash):
+            return bad_request(
+                "Current password is incorrect", "AUTH_INVALID_CREDENTIALS"
+            )
+
+        users.set_password(
+            user_id=current.user_id,
+            password_hash=hash_password(new_password, rounds=bcrypt_rounds),
+            must_change_password=False,
+        )
+        users.append_audit(
+            actor_id=current.user_id,
+            action=ACTION_PASSWORD_CHANGED,
+            target_id=current.user_id,
+            details={},
+        )
+        return jsonify({"message": "Password changed successfully."}), 200
 
     # ── GET /auth/me ─────────────────────────────────────────────────
 
