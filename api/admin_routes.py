@@ -128,13 +128,18 @@ def build_admin_blueprint(
         if target.user_id == actor.user_id:
             return bad_request("An admin cannot ban themselves", "SELF_ACTION_FORBIDDEN")
         users.set_banned(user_id=user_id, banned=True)
+        frozen: list[str] = []
+        for w in wallets.list_user_wallets(user_id):
+            if not w.frozen:
+                wallets.set_frozen(wallet_id=w.wallet_id, frozen=True)
+            frozen.append(w.wallet_id)
         users.append_audit(
             actor_id=actor.user_id,
             action=ACTION_USER_BANNED,
             target_id=user_id,
-            details={},
+            details={"frozen_wallets": frozen},
         )
-        return jsonify({"user_id": user_id, "banned": True}), 200
+        return jsonify({"user_id": user_id, "banned": True, "frozen_wallets": frozen}), 200
 
     # ── POST /admin/users/<user_id>/unban ────────────────────────────
 
