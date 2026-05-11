@@ -39,12 +39,14 @@ from domain.crypto import (
 )
 from domain.models import Transaction
 from domain.wallet_repository import (
+    CurrencyMismatchError,
     InsufficientBalanceError,
     NonceReplayError,
     WalletFrozenError,
     WalletNotFoundError,
     WalletRepositoryProtocol,
     WalletRecord,
+    WalletType,
 )
 
 
@@ -66,7 +68,13 @@ class WalletService:
     def __init__(self, wallets: WalletRepositoryProtocol) -> None:
         self._wallets = wallets
 
-    def create_wallet(self, *, user_id: str) -> CreatedWallet:
+    def create_wallet(
+        self,
+        *,
+        user_id: str,
+        currency: str = "NATIVE",
+        wallet_type: str = WalletType.USER.value,
+    ) -> CreatedWallet:
         wallet_id = "w_" + secrets.token_hex(8)
         mnemonic = generate_mnemonic()
         seed = mnemonic_to_seed(mnemonic)
@@ -76,6 +84,8 @@ class WalletService:
             wallet_id=wallet_id,
             user_id=user_id,
             public_key=pub_hex,
+            currency=currency,
+            wallet_type=wallet_type,
         )
         # Wipe the seed/mnemonic locals as a mild defence-in-depth so
         # they do not survive a long-lived reference. (The mnemonic
@@ -137,6 +147,8 @@ class TransferService:
             raise WalletFrozenError(
                 sender_wallet_id if sender.frozen else receiver_wallet_id
             )
+        if sender.currency != receiver.currency:
+            raise CurrencyMismatchError(sender_wallet_id)
         if sender.balance < amount:
             raise InsufficientBalanceError(sender_wallet_id)
 

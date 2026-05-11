@@ -30,8 +30,10 @@ from config import (
     TESTING,
 )
 from domain import BlockchainService, ConsensusService, InMemoryNodeRegistry, MempoolService, PropagationService
+from domain.currency_repository import CurrencyRepositoryProtocol, InMemoryCurrencyStore
 from domain.user_repository import InMemoryUserStore, UserRepositoryProtocol
 from domain.wallet_repository import InMemoryWalletStore, WalletRepositoryProtocol
+from infrastructure.postgres_currency_store import PostgresCurrencyStore
 from infrastructure.postgres_mempool_repository import PostgresMempoolRepository
 from infrastructure.postgres_node_registry import PostgresNodeRegistry
 from infrastructure.postgres_repository import PostgresBlockRepository
@@ -76,8 +78,13 @@ def _v1_home_payload() -> dict[str, object]:
             "admin_wallets": "/api/v1/admin/wallets",
             "admin_wallet_freeze": "/api/v1/admin/wallets/<id>/freeze",
             "admin_wallet_unfreeze": "/api/v1/admin/wallets/<id>/unfreeze",
+            "admin_wallet_top_up": "/api/v1/admin/wallets/<id>/top-up",
+            "admin_currencies": "/api/v1/admin/currencies",
+            "admin_treasury": "/api/v1/admin/treasury",
+            "admin_exchange_rates": "/api/v1/admin/exchange-rates",
             "wallets_create": "/api/v1/wallets",
             "wallets_me": "/api/v1/wallets/me",
+            "currencies": "/api/v1/currencies",
             "transactions_signed": "/api/v1/transactions/signed",
             "health": "/api/v1/health",
             "metrics": "/api/v1/metrics",
@@ -145,6 +152,7 @@ def create_app(
     app = Quart(__name__)
     if dsn:
         wallet_store: WalletRepositoryProtocol = wallets or PostgresWalletStore(dsn)
+        currency_store: CurrencyRepositoryProtocol = PostgresCurrencyStore(dsn)
         chain_service = blockchain or BlockchainService(
             repository=PostgresBlockRepository(dsn),
             difficulty_prefix=DIFFICULTY_PREFIX,
@@ -155,6 +163,7 @@ def create_app(
         user_store: UserRepositoryProtocol = users or PostgresUserStore(dsn)
     else:
         wallet_store = wallets or InMemoryWalletStore()
+        currency_store = InMemoryCurrencyStore()
         chain_service = blockchain or BlockchainService(
             difficulty_prefix=DIFFICULTY_PREFIX,
             wallet_repo=wallet_store,
@@ -331,14 +340,20 @@ def create_app(
         user_overrides=user_store.get_user_overrides,
     )
     admin_bp = build_admin_blueprint(
-        users=user_store, wallets=wallet_store, bcrypt_rounds=BCRYPT_ROUNDS
+        users=user_store,
+        wallets=wallet_store,
+        currencies=currency_store,
+        bcrypt_rounds=BCRYPT_ROUNDS,
     )
     api_v1.register_blueprint(admin_bp)
 
     # Phase I.3: wallet endpoints (create, list-mine, signed transfer,
     # admin mint). Each route is gated by `@require_permission(...)`.
     wallet_bp = build_wallet_blueprint(
-        wallets=wallet_store, users=user_store, mempool=pool
+        wallets=wallet_store,
+        users=user_store,
+        mempool=pool,
+        currencies=currency_store,
     )
     api_v1.register_blueprint(wallet_bp)
 

@@ -16,6 +16,17 @@ _SIGNED_TRANSACTION_REQUIRED = (
 _MAX_FIELD_LEN = 255
 
 
+def parse_currency_code(value: object | None) -> str:
+    if value is None or value == "":
+        return "NATIVE"
+    code = str(value).strip().upper()
+    if not code:
+        return "NATIVE"
+    if len(code) > 10 or not code.isalnum():
+        raise ValueError("'currency' must be alphanumeric and <= 10 characters")
+    return code
+
+
 def parse_transaction(data: dict | None) -> Transaction:
     """Parse the legacy v0.10.0 transaction shape (sender/receiver as
     free strings, no signature). Kept for back-compat with the v0.6.0

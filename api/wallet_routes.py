@@ -22,13 +22,15 @@ from quart import Blueprint, jsonify, request
 from api.auth_middleware import require_auth
 from api.errors import bad_request
 from api.permissions import require_permission
-from api.schemas import parse_signed_transaction
+from api.schemas import parse_currency_code, parse_signed_transaction
+from domain.currency_repository import CurrencyRepositoryProtocol
 from domain.audit import AuditEntry  # noqa: F401 — for type completeness
 from domain.mempool import MempoolService
 from domain.permissions import Permission
 from domain.user_repository import UserRepositoryProtocol
 from domain.wallet import MintService, TransferService, WalletService
 from domain.wallet_repository import (
+    CurrencyMismatchError,
     InsufficientBalanceError,
     NonceReplayError,
     WalletFrozenError,
@@ -43,6 +45,7 @@ def build_wallet_blueprint(
     wallets: WalletRepositoryProtocol,
     users: UserRepositoryProtocol,
     mempool: MempoolService,
+    currencies: CurrencyRepositoryProtocol,
 ) -> Blueprint:
     bp = Blueprint("wallet", __name__)
 
@@ -56,7 +59,17 @@ def build_wallet_blueprint(
     @require_permission(Permission.CREATE_WALLET)
     async def create_wallet():
         current = require_auth()
-        created = wallet_svc.create_wallet(user_id=current.user_id)
+        data = await request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        try:
+            currency = parse_currency_code(data.get("currency"))
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        if currencies.get_currency(currency) is None:
+            return bad_request("Currency not found", "CURRENCY_NOT_FOUND")
+
+        created = wallet_svc.create_wallet(user_id=current.user_id, currency=currency)
         # The mnemonic is returned ONCE here — show this response to the
         # user, ask them to record it, and discard. The server does not
         # persist it.
@@ -65,6 +78,7 @@ def build_wallet_blueprint(
                 {
                     "wallet_id": created.wallet_id,
                     "public_key": created.public_key,
+                    "currency": currency,
                     "mnemonic": created.mnemonic,
                     "warning": (
                         "This mnemonic is shown only once. Store it securely. "
@@ -89,6 +103,7 @@ def build_wallet_blueprint(
                             "wallet_id": r.wallet_id,
                             "user_id": r.user_id,
                             "currency": r.currency,
+                            "wallet_type": r.wallet_type,
                             "balance": float(r.balance),
                             "public_key": r.public_key,
                             "frozen": r.frozen,
@@ -143,6 +158,8 @@ def build_wallet_blueprint(
             return bad_request("Wallet is frozen", "WALLET_FROZEN")
         except InsufficientBalanceError:
             return bad_request("Insufficient balance", "INSUFFICIENT_BALANCE")
+        except CurrencyMismatchError:
+            return bad_request("Wallet currencies must match", "CURRENCY_MISMATCH")
         except SignatureRejectedError:
             return bad_request("Signature does not verify", "SIGNATURE_INVALID")
         except NonceReplayError:
@@ -196,5 +213,30 @@ def build_wallet_blueprint(
 
         mempool.add(tx)
         return jsonify({"message": "Mint queued", "transaction": tx.to_dict()}), 201
+
+    # ── GET /currencies ─────────────────────────────────────────────
+
+    @bp.route("/currencies", methods=["GET"])
+    async def list_currencies():
+        require_auth()
+        active_only = request.args.get("active", "true").lower() != "false"
+        records = currencies.list_currencies(active_only=active_only)
+        return (
+            jsonify(
+                {
+                    "currencies": [
+                        {
+                            "code": c.code,
+                            "name": c.name,
+                            "decimals": c.decimals,
+                            "active": c.active,
+                        }
+                        for c in records
+                    ],
+                    "count": len(records),
+                }
+            ),
+            200,
+        )
 
     return bp
