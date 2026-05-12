@@ -51,6 +51,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Redirige a `/dashboard` o última ruta autenticada
 
 **Precondiciones:**
+
 - Cuenta activada
 - Usuario no baneado
 - Contraseña correcta
@@ -76,6 +77,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 8. Sesión se mantiene activa
 
 **Precondiciones:**
+
 - Usuario autenticado
 - Contraseña actual correcta
 
@@ -107,6 +109,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Wallet aparece en lista **My Wallets**
 
 **Precondiciones:**
+
 - Moneda activa en catálogo
 - Usuario no baneado
 
@@ -135,6 +138,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 4. Autorefresh cada 30 seg
 
 **Precondiciones:**
+
 - Usuario tiene al menos una wallet
 
 **Resultado:** Vista clara del patrimonio en múltiples monedas.
@@ -165,6 +169,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Al minar bloque: transacción se confirma, balances actualizan
 
 **Precondiciones:**
+
 - OPERATOR u ADMIN
 - Origen y destino son sus wallets
 - Saldo suficiente
@@ -199,6 +204,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 8. Al minar: transacción confirma, balance actualizado
 
 **Precondiciones:**
+
 - OPERATOR o ADMIN
 - Saldo suficiente
 - Destinatario activo (no baneado)
@@ -236,6 +242,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 8. Al minar: exchange ejecutado, balances finales
 
 **Precondiciones:**
+
 - OPERATOR o ADMIN
 - Tasa cambio configurada (admin)
 - Saldo suficiente en origen
@@ -272,6 +279,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Rate-limit: máx 5 bloques/minuto por usuario
 
 **Precondiciones:**
+
 - OPERATOR o ADMIN
 - Mempool no vacío (o al menos minería es válida)
 
@@ -299,6 +307,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Endpoint `/api/v1/chain` retorna array de bloques
 
 **Precondiciones:**
+
 - Ninguna (pública)
 
 **Resultado:** Transparencia total de la cadena.
@@ -325,6 +334,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Muestra timestmp de validación
 
 **Precondiciones:**
+
 - Cadena con 1+ bloques
 
 **Resultado:** Confirmación de integridad o identificación de adulteración.
@@ -354,6 +364,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Autorefresh en tiempo real (WebSocket)
 
 **Precondiciones:**
+
 - Ninguna (pública)
 
 **Resultado:** Visibilidad de transacciones no confirmadas.
@@ -382,6 +393,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Mempool se reinicia (txs no confirmadas reencoladas si necesario)
 
 **Precondiciones:**
+
 - 2+ nodos registrados
 - Red simulada o distributed
 
@@ -415,6 +427,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
    - Solo si `active=true`
 
 **Precondiciones:**
+
 - ADMIN
 
 **Resultado:** Moneda nueva disponible para wallets y exchange.
@@ -442,6 +455,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Wallet lista en `/admin/treasury`
 
 **Precondiciones:**
+
 - ADMIN
 - Moneda activa
 - No existe treasury de esa moneda
@@ -470,6 +484,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 8. Fondos disponibles para top-ups
 
 **Precondiciones:**
+
 - ADMIN con permiso MINT
 - Treasury wallet existe
 
@@ -500,6 +515,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 7. Balance del usuario actualiza
 
 **Precondiciones:**
+
 - ADMIN con permiso TOP_UP
 - Treasury suficiente balance
 - Wallets en misma moneda
@@ -532,6 +548,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 6. Usuarios pueden hacer exchange con esa tasa
 
 **Precondiciones:**
+
 - ADMIN
 - Ambas monedas activas
 
@@ -561,6 +578,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 6. Usuarios usan tasas reales inmediatamente
 
 **Precondiciones:**
+
 - ADMIN
 - Currencies activas en BD
 - Binance API accesible
@@ -597,6 +615,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Usuarios operan con precios reales automáticos
 
 **Precondiciones:**
+
 - EXCHANGE_FEED_ENABLED=true en env
 - Valid provider y pairs
 
@@ -655,6 +674,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 5. Usuario puede loguear nuevamente
 
 **Precondiciones:**
+
 - ADMIN
 
 **Resultado:** Control completo de ciclo de vida de usuario.
@@ -682,6 +702,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 8. Usuario tiene nuevos permisos inmediatamente en próxima solicitud
 
 **Precondiciones:**
+
 - ADMIN
 
 **Resultado:** Permisos del usuario redefinidos dinámicamente.
@@ -709,6 +730,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 3. Usuario pierde permiso (vuelve a baseline de rol)
 
 **Precondiciones:**
+
 - ADMIN con permiso MANAGE_PERMISSIONS
 
 **Resultado:** Permisos granulares por usuario.
@@ -739,6 +761,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 6. Export opcionalmente a CSV/JSON
 
 **Precondiciones:**
+
 - ADMIN
 
 **Resultado:** Auditoría completa de todas las acciones.
@@ -769,6 +792,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 3. Audit: `ACTION_WALLET_UNFROZEN`
 
 **Precondiciones:**
+
 - ADMIN
 
 **Resultado:** Wallet bloqueada/desbloqueada, fondos íntegros.
@@ -778,6 +802,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 ## 5. PERMISOS POR FLUJO
 
 ### VIEWER (Por defecto)
+
 - ✓ Crear wallet propia
 - ✓ Ver wallets propias y balances
 - ✓ Ver cadena pública
@@ -787,6 +812,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 - ✗ Admin
 
 ### OPERATOR
+
 - ✓ Todo de VIEWER
 - ✓ Transferir entre usuarios
 - ✓ Exchange (monedas)
@@ -795,6 +821,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 - ✗ Admin (crear currency, treasury, etc.)
 
 ### ADMIN
+
 - ✓ Todo de OPERATOR
 - ✓ Crear monedas
 - ✓ Treasury wallet
@@ -810,7 +837,8 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 
 ### Escenario A: Trading multi-moneda
 
-**Actor:** User (OPERATOR)  
+**Actor:** User (OPERATOR)
+
 1. Crea wallet BTC, wallet ETH, wallet SOL
 2. Recibe 1 BTC desde treasury
 3. Exchange 1 BTC → 15.5 ETH (tasa 15.5, fee 1%)
@@ -826,7 +854,8 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 
 ### Escenario B: Auditoria de fraude
 
-**Actor:** ADMIN investigando transacción sospechosa  
+**Actor:** ADMIN investigando transacción sospechosa
+
 1. Usuario reporta envío no autorizado
 2. ADMIN navega a `/admin/audit`
 3. Filtra por Target ID (wallet del usuario)
@@ -851,6 +880,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 **Escenario:** Empresa quiere onboardear 100 empleados con crypto de nómina
 
 **Pasos:**
+
 1. ADMIN crea wallet de tesorería USDT
 2. ADMIN ejecuta mint: $500,000 a tesorería
 3. ADMIN crea usuarios en batch (CLI o importación)
@@ -915,6 +945,7 @@ Esta guía describe los flujos completos de usuario a través de la plataforma, 
 ### Auditoría disponible
 
 Cada acción registra:
+
 - `actor_id`: quién hizo
 - `action`: qué se hizo (ACTION_TRANSFER, ACTION_USER_BANNED, etc.)
 - `target_id`: sobre quién/qué
@@ -925,19 +956,19 @@ Cada acción registra:
 
 ## Resumen de Flujos Principales
 
-| Flujo | VIEWER | OPERATOR | ADMIN |
-|-------|--------|----------|-------|
-| Registro e Ingreso | ✓ | ✓ | ✓ |
-| Ver/crear wallets | ✓ | ✓ | ✓ |
-| Transferencia | ✗ | ✓ | ✓ |
-| Exchange | ✗ | ✓ | ✓ |
-| Minar | ✗ | ✓ | ✓ |
-| Ver cadena | ✓ | ✓ | ✓ |
-| Admin usuarios | ✗ | ✗ | ✓ |
-| Monedas/Treasury | ✗ | ✗ | ✓ |
-| Tasas (manual) | ✗ | ✗ | ✓ |
-| Tasas (Binance) | ✗ | ✗ | ✓ |
-| Audit log | ✗ | ✓ | ✓ |
+| Flujo              | VIEWER | OPERATOR | ADMIN |
+| ------------------ | ------ | -------- | ----- |
+| Registro e Ingreso | ✓      | ✓        | ✓     |
+| Ver/crear wallets  | ✓      | ✓        | ✓     |
+| Transferencia      | ✗      | ✓        | ✓     |
+| Exchange           | ✗      | ✓        | ✓     |
+| Minar              | ✗      | ✓        | ✓     |
+| Ver cadena         | ✓      | ✓        | ✓     |
+| Admin usuarios     | ✗      | ✗        | ✓     |
+| Monedas/Treasury   | ✗      | ✗        | ✓     |
+| Tasas (manual)     | ✗      | ✗        | ✓     |
+| Tasas (Binance)    | ✗      | ✗        | ✓     |
+| Audit log          | ✗      | ✓        | ✓     |
 
 ---
 
