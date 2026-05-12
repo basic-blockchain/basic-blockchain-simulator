@@ -16,6 +16,8 @@ Mounted under `/api/v1`:
 from __future__ import annotations
 
 from decimal import Decimal
+import secrets
+import time
 
 from quart import Blueprint, jsonify, request
 
@@ -28,7 +30,7 @@ from domain.audit import AuditEntry  # noqa: F401 — for type completeness
 from domain.mempool import MempoolService
 from domain.permissions import Permission
 from domain.user_repository import UserRepositoryProtocol
-from domain.wallet import MintService, TransferService, WalletService
+from domain.wallet import ExchangeRateNotFoundError, MintService, TransferService, WalletService
 from domain.wallet_repository import (
     CurrencyMismatchError,
     InsufficientBalanceError,
@@ -38,6 +40,18 @@ from domain.wallet_repository import (
     WalletRepositoryProtocol,
 )
 from domain.wallet import SignatureRejectedError
+
+
+_WALLET_DRAFT_TTL_SECONDS = 600
+_wallet_drafts: dict[str, dict[str, object]] = {}
+
+
+def _prune_wallet_drafts(now: float) -> None:
+    expired = [
+        key for key, draft in _wallet_drafts.items() if now - float(draft["created_at"]) > _WALLET_DRAFT_TTL_SECONDS
+    ]
+    for key in expired:
+        _wallet_drafts.pop(key, None)
 
 
 def build_wallet_blueprint(
@@ -50,8 +64,91 @@ def build_wallet_blueprint(
     bp = Blueprint("wallet", __name__)
 
     wallet_svc = WalletService(wallets)
-    transfer_svc = TransferService(wallets)
+    transfer_svc = TransferService(wallets, currencies)
     mint_svc = MintService(wallets)
+
+    # ── POST /wallets/preview ───────────────────────────────────────
+
+    @bp.route("/wallets/preview", methods=["POST"])
+    @require_permission(Permission.CREATE_WALLET)
+    async def preview_wallet():
+        current = require_auth()
+        data = await request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        try:
+            currency = parse_currency_code(data.get("currency"))
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
+        if currencies.get_currency(currency) is None:
+            return bad_request("Currency not found", "CURRENCY_NOT_FOUND")
+
+        now = time.time()
+        _prune_wallet_drafts(now)
+        material = wallet_svc.generate_wallet_material()
+        draft_id = secrets.token_urlsafe(16)
+        _wallet_drafts[draft_id] = {
+            "user_id": current.user_id,
+            "currency": currency,
+            "public_key": material.public_key,
+            "mnemonic": material.mnemonic,
+            "created_at": now,
+        }
+        return (
+            jsonify(
+                {
+                    "draft_id": draft_id,
+                    "currency": currency,
+                    "public_key": material.public_key,
+                    "mnemonic": material.mnemonic,
+                    "warning": (
+                        "This mnemonic is shown only once. Store it securely. "
+                        "It is the only way to authorise transfers from this wallet."
+                    ),
+                }
+            ),
+            200,
+        )
+
+    # ── POST /wallets/confirm ───────────────────────────────────────
+
+    @bp.route("/wallets/confirm", methods=["POST"])
+    @require_permission(Permission.CREATE_WALLET)
+    async def confirm_wallet():
+        current = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        draft_id = str(data.get("draft_id") or "").strip()
+        if not draft_id:
+            return bad_request("'draft_id' is required", "VALIDATION_ERROR")
+
+        now = time.time()
+        _prune_wallet_drafts(now)
+        draft = _wallet_drafts.get(draft_id)
+        if not draft or draft.get("user_id") != current.user_id:
+            return bad_request("Wallet draft not found", "WALLET_DRAFT_NOT_FOUND")
+        if now - float(draft["created_at"]) > _WALLET_DRAFT_TTL_SECONDS:
+            _wallet_drafts.pop(draft_id, None)
+            return bad_request("Wallet draft expired", "WALLET_DRAFT_EXPIRED")
+
+        created = wallet_svc.create_wallet_with_public_key(
+            user_id=current.user_id,
+            public_key=str(draft["public_key"]),
+            currency=str(draft["currency"]),
+        )
+        _wallet_drafts.pop(draft_id, None)
+        return (
+            jsonify(
+                {
+                    "wallet_id": created.wallet_id,
+                    "public_key": created.public_key,
+                    "currency": str(draft["currency"]),
+                    "message": "Wallet created",
+                }
+            ),
+            201,
+        )
 
     # ── POST /wallets ────────────────────────────────────────────────
 
@@ -158,6 +255,8 @@ def build_wallet_blueprint(
             return bad_request("Wallet is frozen", "WALLET_FROZEN")
         except InsufficientBalanceError:
             return bad_request("Insufficient balance", "INSUFFICIENT_BALANCE")
+        except ExchangeRateNotFoundError:
+            return bad_request("Exchange rate not found", "EXCHANGE_RATE_NOT_FOUND")
         except CurrencyMismatchError:
             return bad_request("Wallet currencies must match", "CURRENCY_MISMATCH")
         except SignatureRejectedError:
@@ -167,6 +266,8 @@ def build_wallet_blueprint(
             # uniform error envelope. The dedicated code lets clients
             # branch.
             return bad_request("Nonce already used", "NONCE_REPLAY")
+        except ValueError as exc:
+            return bad_request(str(exc), "VALIDATION_ERROR")
 
         mempool.add(tx)
         return (
