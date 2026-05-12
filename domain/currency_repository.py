@@ -22,6 +22,7 @@ class ExchangeRateRecord:
     to_currency: str
     rate: Decimal
     fee_rate: Decimal
+    source: str
     updated_at: str
 
 
@@ -58,6 +59,7 @@ class CurrencyRepositoryProtocol(Protocol):
         to_currency: str,
         rate: Decimal,
         fee_rate: Decimal,
+        source: str,
     ) -> ExchangeRateRecord: ...
 
 
@@ -111,6 +113,7 @@ class InMemoryCurrencyStore:
         to_currency: str,
         rate: Decimal,
         fee_rate: Decimal,
+        source: str,
     ) -> ExchangeRateRecord:
         self._rate_seq += 1
         record = ExchangeRateRecord(
@@ -119,6 +122,7 @@ class InMemoryCurrencyStore:
             to_currency=to_currency,
             rate=rate,
             fee_rate=fee_rate,
+            source=source,
             updated_at="now",
         )
         self._rates.append(record)

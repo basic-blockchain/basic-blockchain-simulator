@@ -76,7 +76,7 @@ class PostgresCurrencyStore:
             params.append(to_currency)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         query = (
-            "SELECT rate_id, from_currency, to_currency, rate, fee_rate, updated_at "
+            "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
             "FROM exchange_rates"
             + where
             + " ORDER BY updated_at DESC LIMIT %s"
@@ -92,7 +92,8 @@ class PostgresCurrencyStore:
                 to_currency=r[2],
                 rate=Decimal(r[3]),
                 fee_rate=Decimal(r[4]),
-                updated_at=str(r[5]),
+                source=r[5],
+                updated_at=str(r[6]),
             )
             for r in rows
         ]
@@ -104,12 +105,13 @@ class PostgresCurrencyStore:
         to_currency: str,
         rate: Decimal,
         fee_rate: Decimal,
+        source: str,
     ) -> ExchangeRateRecord:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO exchange_rates (from_currency, to_currency, rate, fee_rate) "
-                "VALUES (%s, %s, %s, %s) RETURNING rate_id, updated_at",
-                (from_currency, to_currency, rate, fee_rate),
+                "INSERT INTO exchange_rates (from_currency, to_currency, rate, fee_rate, source) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING rate_id, updated_at",
+                (from_currency, to_currency, rate, fee_rate, source),
             )
             row = cur.fetchone()
         return ExchangeRateRecord(
@@ -118,5 +120,6 @@ class PostgresCurrencyStore:
             to_currency=to_currency,
             rate=rate,
             fee_rate=fee_rate,
+            source=source,
             updated_at=str(row[1]),
         )
