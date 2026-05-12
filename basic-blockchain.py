@@ -411,7 +411,6 @@ def create_app(
         currencies=currency_store,
         bcrypt_rounds=BCRYPT_ROUNDS,
     )
-    )
     api_v1.register_blueprint(admin_bp)
 
     # Phase I.3: wallet endpoints (create, list-mine, signed transfer,
