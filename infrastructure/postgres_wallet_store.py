@@ -100,6 +100,7 @@ class PostgresWalletStore:
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             # Lock both wallet rows in a deterministic order to avoid a
@@ -123,6 +124,7 @@ class PostgresWalletStore:
                 raise WalletFrozenError(receiver_wallet_id)
             if Decimal(sender_row[1]) < amount:
                 raise InsufficientBalanceError(sender_wallet_id)
+            credit_amount = receiver_amount if receiver_amount is not None else amount
             cur.execute(
                 "UPDATE wallets SET balance = balance - %s, updated_at = now() "
                 "WHERE wallet_id = %s",
@@ -131,7 +133,7 @@ class PostgresWalletStore:
             cur.execute(
                 "UPDATE wallets SET balance = balance + %s, updated_at = now() "
                 "WHERE wallet_id = %s",
-                (amount, receiver_wallet_id),
+                (credit_amount, receiver_wallet_id),
             )
 
     def credit(self, *, wallet_id: str, amount: Decimal) -> None:
