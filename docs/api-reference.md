@@ -783,6 +783,144 @@ These endpoints will be deprecated in a future release.
 
 ---
 
+## Admin: Exchange Rates (Phase I.4, v1.5.0)
+
+Admins with `MANAGE_EXCHANGE_RATES` permission can list, manually set, or sync
+exchange rates from external providers.
+
+### `GET /admin/exchange-rates`
+
+List all exchange rates in the catalog.
+
+**Query Parameters:**
+- `from` (optional): Filter by source currency (exact match)
+- `to` (optional): Filter by target currency (exact match)
+- `limit` (optional, default 100): Max results to return
+
+**Response (200 OK):**
+```json
+{
+  "rates": [
+    {
+      "rate_id": 1,
+      "from_currency": "BTC",
+      "to_currency": "USDT",
+      "rate": "80700.50",
+      "fee_rate": "0.01",
+      "source": "BINANCE",
+      "updated_at": "2026-05-12T12:30:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### `PUT /admin/exchange-rates/<FROM>/<TO>`
+
+Set a manual exchange rate (not synced from external sources).
+
+**Request:**
+```json
+{
+  "rate": 80700.50,
+  "fee_rate": 0.01
+}
+```
+
+**Response (201 Created):**
+Same structure as GET, with status 201.
+
+**Errors:**
+- `VALIDATION_ERROR`: rate/fee_rate invalid or currencies identical
+- `CURRENCY_NOT_FOUND`: source or target currency not in catalog
+- `AUTH_INSUFFICIENT_PERMISSION`: user lacks `MANAGE_EXCHANGE_RATES`
+
+### `POST /admin/exchange-rates/sync`
+
+Sync exchange rates from an external provider (Binance, Crypto.com).
+
+**Request:**
+```json
+{
+  "provider": "CRYPTO_COM",
+  "pairs": ["BTC/USDT", "ETH/USDT"]
+}
+```
+
+**Supported Providers:**
+- `BINANCE` – Binance spot API v3
+  - Symbol format: no separator (e.g., `BTCUSDT`)
+  - Endpoint: `https://api.binance.com/api/v3/ticker/price?symbol={PAIR}`
+  
+- `CRYPTO_COM` – Crypto.com v2 public API
+  - Symbol format: underscore-separated (e.g., `BTC_USDT`)
+  - Endpoint: `https://api.crypto.com/v2/public/get-ticker?instrument_name={PAIR}`
+
+**Pairs Array:**
+- Can be a list of strings: `["BTC/USDT", "ETH/USDT"]`
+- Or a CSV string: `pairs_csv: "BTC/USDT,ETH/USDT"`
+- Each pair must be two distinct active currencies in the catalog
+
+**Response (200 OK):**
+```json
+{
+  "rates": [
+    {
+      "rate_id": 2,
+      "from_currency": "BTC",
+      "to_currency": "USDT",
+      "rate": "80700.38",
+      "fee_rate": "0",
+      "source": "CRYPTO_COM",
+      "updated_at": "2026-05-12T12:35:00Z"
+    },
+    {
+      "rate_id": 3,
+      "from_currency": "ETH",
+      "to_currency": "USDT",
+      "rate": "2283.55",
+      "fee_rate": "0",
+      "source": "CRYPTO_COM",
+      "updated_at": "2026-05-12T12:35:00Z"
+    }
+  ],
+  "count": 2,
+  "provider": "CRYPTO_COM"
+}
+```
+
+**Errors:**
+- `VALIDATION_ERROR`: invalid provider, pairs format, or currencies
+- `CURRENCY_NOT_FOUND`: one or more currencies not in catalog
+- `EXCHANGE_FEED_ERROR`: external API unavailable or returned invalid data
+  - Example: `"Crypto.com response missing price for BTC_USDT"`
+- `AUTH_INSUFFICIENT_PERMISSION`: user lacks `MANAGE_EXCHANGE_RATES`
+
+**Example (Crypto.com):**
+```bash
+TOKEN="eyJhbGciOi..."
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "provider": "CRYPTO_COM",
+    "pairs": ["BTC/USDT", "ETH/USDT"]
+  }'
+```
+
+**Example (Binance):**
+```bash
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "provider": "BINANCE",
+    "pairs": ["BTC/USDT", "ETH/USDT"]
+  }'
+```
+
+---
+
 ## Quick Reference
 
 ```bash
@@ -816,6 +954,16 @@ curl http://localhost:5000/api/v1/health
 
 # Metrics
 curl http://localhost:5000/api/v1/metrics
+
+# List exchange rates
+curl http://localhost:5000/api/v1/admin/exchange-rates \
+  -H "Authorization: Bearer $TOKEN"
+
+# Sync exchange rates from Crypto.com
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"provider":"CRYPTO_COM","pairs":["BTC/USDT","ETH/USDT"]}'
 
 # WebSocket (requires wscat or similar)
 wscat -c ws://localhost:5000/api/v1/ws
