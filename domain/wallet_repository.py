@@ -108,6 +108,7 @@ class WalletRepositoryProtocol(Protocol):
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         """Debit sender, credit receiver in one transaction. Raises
         `InsufficientBalanceError` / `WalletFrozenError` on guard
@@ -199,6 +200,7 @@ class InMemoryWalletStore:
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         sender = self._wallets.get(sender_wallet_id)
         receiver = self._wallets.get(receiver_wallet_id)
@@ -212,6 +214,7 @@ class InMemoryWalletStore:
             raise WalletFrozenError(receiver_wallet_id)
         if sender.balance < amount:
             raise InsufficientBalanceError(sender_wallet_id)
+        credit_amount = receiver_amount if receiver_amount is not None else amount
         # Replace records with new balances (frozen-state preserving).
         self._wallets[sender_wallet_id] = WalletRecord(
             wallet_id=sender.wallet_id,
@@ -227,7 +230,7 @@ class InMemoryWalletStore:
             user_id=receiver.user_id,
             currency=receiver.currency,
             wallet_type=receiver.wallet_type,
-            balance=receiver.balance + amount,
+            balance=receiver.balance + credit_amount,
             public_key=receiver.public_key,
             frozen=receiver.frozen,
         )
