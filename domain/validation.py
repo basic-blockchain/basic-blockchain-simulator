@@ -6,6 +6,8 @@ from .models import Transaction
 def validate_transaction(tx: Transaction) -> None:
     if tx.amount <= 0:
         raise ValueError("Transaction amount must be greater than zero")
+    if tx.receiver_amount is not None and tx.receiver_amount <= 0:
+        raise ValueError("Transaction receiver_amount must be greater than zero")
     if tx.sender.strip() == "":
         raise ValueError("Transaction sender must not be empty")
     if tx.receiver.strip() == "":

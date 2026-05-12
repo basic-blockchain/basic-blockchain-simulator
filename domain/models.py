@@ -9,6 +9,7 @@ class Transaction:
     sender: str
     receiver: str
     amount: Decimal
+    receiver_amount: Decimal | None = None
     # Phase I.3 fields — wallet IDs, replay-protection nonce, ECDSA signature.
     # Default to empty strings / 0 so legacy code paths (system-issued
     # coinbase transactions, tests built before I.3) still construct.
@@ -20,12 +21,15 @@ class Transaction:
     def __post_init__(self) -> None:
         if not isinstance(self.amount, Decimal):
             self.amount = Decimal(str(self.amount))
+        if self.receiver_amount is not None and not isinstance(self.receiver_amount, Decimal):
+            self.receiver_amount = Decimal(str(self.receiver_amount))
 
     def to_dict(self) -> dict[str, object]:
         return {
             "sender": self.sender,
             "receiver": self.receiver,
             "amount": float(self.amount),
+            "receiver_amount": float(self.receiver_amount) if self.receiver_amount is not None else None,
             "sender_wallet_id": self.sender_wallet_id,
             "receiver_wallet_id": self.receiver_wallet_id,
             "nonce": self.nonce,
