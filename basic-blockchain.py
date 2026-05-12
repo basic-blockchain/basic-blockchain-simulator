@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from dotenv import load_dotenv
@@ -17,13 +18,17 @@ from api.wallet_routes import build_wallet_blueprint
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
-from api.schemas import parse_transaction
+from api.schemas import parse_currency_code, parse_transaction
 from api.websocket_hub import WebSocketHub
 from config import (
     BCRYPT_ROUNDS,
     BOOTSTRAP_ADMIN_USERNAME,
     DATABASE_URL,
     DIFFICULTY_PREFIX,
+    EXCHANGE_FEED_ENABLED,
+    EXCHANGE_FEED_INTERVAL_SECONDS,
+    EXCHANGE_FEED_PAIRS,
+    EXCHANGE_FEED_PROVIDER,
     JWT_ALGORITHM,
     JWT_SECRET,
     JWT_TTL_SECONDS,
@@ -39,6 +44,13 @@ from infrastructure.postgres_node_registry import PostgresNodeRegistry
 from infrastructure.postgres_repository import PostgresBlockRepository
 from infrastructure.postgres_user_store import PostgresUserStore
 from infrastructure.postgres_wallet_store import PostgresWalletStore
+from infrastructure.exchange_rate_sync import (
+    ExchangeRateSyncError,
+    ExchangeRateSyncPair,
+    PROVIDER_BINANCE,
+    PROVIDER_CRYPTO_COM,
+    sync_exchange_rates,
+)
 
 
 def _legacy_home_payload() -> dict[str, object]:
@@ -82,6 +94,7 @@ def _v1_home_payload() -> dict[str, object]:
             "admin_currencies": "/api/v1/admin/currencies",
             "admin_treasury": "/api/v1/admin/treasury",
             "admin_exchange_rates": "/api/v1/admin/exchange-rates",
+            "admin_exchange_rates_sync": "/api/v1/admin/exchange-rates/sync",
             "wallets_create": "/api/v1/wallets",
             "wallets_me": "/api/v1/wallets/me",
             "currencies": "/api/v1/currencies",
@@ -188,6 +201,59 @@ def create_app(
     @app.before_request
     async def _assign_request_id():
         g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+    def _parse_exchange_feed_pairs(
+        *,
+        raw_pairs: str,
+        currencies: CurrencyRepositoryProtocol,
+    ) -> list[ExchangeRateSyncPair]:
+        pairs: list[ExchangeRateSyncPair] = []
+        if not raw_pairs.strip():
+            return pairs
+        for entry in [p.strip() for p in raw_pairs.split(",") if p.strip()]:
+            if "/" not in entry:
+                raise ValueError("pairs must use FROM/TO format (example: BTC/USDT)")
+            raw_from, raw_to = [part.strip() for part in entry.split("/", 1)]
+            from_currency = parse_currency_code(raw_from)
+            to_currency = parse_currency_code(raw_to)
+            if from_currency == to_currency:
+                raise ValueError("Currencies must differ")
+            if currencies.get_currency(from_currency) is None or currencies.get_currency(to_currency) is None:
+                raise ValueError("Currency not found")
+            pairs.append(
+                ExchangeRateSyncPair(from_currency=from_currency, to_currency=to_currency)
+            )
+        return pairs
+
+    async def _exchange_feed_loop(
+        *,
+        pairs: list[ExchangeRateSyncPair],
+        provider: str,
+        interval_seconds: int,
+    ) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(
+                    sync_exchange_rates,
+                    currencies=currency_store,
+                    pairs=pairs,
+                    provider=provider,
+                )
+                logger.info(
+                    "exchange_feed_synced",
+                    extra={
+                        "data": {
+                            "provider": provider,
+                            "pairs": [f"{p.from_currency}/{p.to_currency}" for p in pairs],
+                        }
+                    },
+                )
+            except ExchangeRateSyncError as exc:
+                logger.warning(
+                    "exchange_feed_failed",
+                    extra={"data": {"provider": provider, "error": str(exc)}},
+                )
+            await asyncio.sleep(interval_seconds)
 
     api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 
@@ -356,6 +422,42 @@ def create_app(
         currencies=currency_store,
     )
     api_v1.register_blueprint(wallet_bp)
+
+    @app.before_serving
+    async def _start_exchange_feed():
+        if TESTING or not EXCHANGE_FEED_ENABLED:
+            return
+        provider = EXCHANGE_FEED_PROVIDER.strip().upper() or PROVIDER_BINANCE
+        if provider not in {PROVIDER_BINANCE, PROVIDER_CRYPTO_COM}:
+            logger.warning(
+                "exchange_feed_disabled",
+                extra={"data": {"reason": "unsupported provider", "provider": provider}},
+            )
+            return
+        try:
+            pairs = _parse_exchange_feed_pairs(
+                raw_pairs=EXCHANGE_FEED_PAIRS,
+                currencies=currency_store,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "exchange_feed_disabled",
+                extra={"data": {"reason": str(exc), "pairs": EXCHANGE_FEED_PAIRS}},
+            )
+            return
+        if not pairs:
+            logger.warning(
+                "exchange_feed_disabled",
+                extra={"data": {"reason": "no pairs configured"}},
+            )
+            return
+        interval = max(30, EXCHANGE_FEED_INTERVAL_SECONDS)
+        app.add_background_task(
+            _exchange_feed_loop,
+            pairs=pairs,
+            provider=provider,
+            interval_seconds=interval,
+        )
 
     app.register_blueprint(api_v1)
     register_error_handlers(app)
