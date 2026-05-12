@@ -41,6 +41,13 @@ from domain.permissions import Permission, effective_permissions
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
 from domain.wallet import WalletService
 from domain.wallet_repository import WalletRepositoryProtocol, WalletType
+from infrastructure.exchange_rate_sync import (
+    ExchangeRateSyncError,
+    ExchangeRateSyncPair,
+    PROVIDER_BINANCE,
+    PROVIDER_CRYPTO_COM,
+    sync_exchange_rates,
+)
 
 
 SYSTEM_USER_ID = "SYSTEM"
@@ -725,6 +732,7 @@ def build_admin_blueprint(
                             "to_currency": r.to_currency,
                             "rate": str(r.rate),
                             "fee_rate": str(r.fee_rate),
+                            "source": r.source,
                             "updated_at": r.updated_at,
                         }
                         for r in records
@@ -773,13 +781,14 @@ def build_admin_blueprint(
             to_currency=to_currency,
             rate=rate,
             fee_rate=fee_rate,
+            source="MANUAL",
         )
 
         users.append_audit(
             actor_id=actor.user_id,
             action=ACTION_EXCHANGE_RATE_SET,
             target_id=f"{from_currency}:{to_currency}",
-            details={"rate": str(rate), "fee_rate": str(fee_rate)},
+            details={"rate": str(rate), "fee_rate": str(fee_rate), "source": "MANUAL"},
         )
 
         return (
@@ -790,10 +799,115 @@ def build_admin_blueprint(
                     "to_currency": record.to_currency,
                     "rate": str(record.rate),
                     "fee_rate": str(record.fee_rate),
+                    "source": record.source,
                     "updated_at": record.updated_at,
                 }
             ),
             201,
+        )
+
+    # ── POST /admin/exchange-rates/sync ───────────────────────────
+
+    @bp.route("/exchange-rates/sync", methods=["POST"])
+    @require_permission(Permission.MANAGE_EXCHANGE_RATES)
+    async def sync_exchange_rates_now():
+        actor = require_auth()
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return bad_request("JSON body required", "VALIDATION_ERROR")
+        provider = str(data.get("provider") or PROVIDER_BINANCE).upper()
+        if provider not in {PROVIDER_BINANCE, PROVIDER_CRYPTO_COM}:
+            return bad_request("Unsupported provider", "VALIDATION_ERROR")
+
+        raw_pairs = data.get("pairs")
+        if raw_pairs is None:
+            raw_pairs = data.get("pairs_csv")
+        if raw_pairs is None:
+            return bad_request("'pairs' is required", "VALIDATION_ERROR")
+
+        pairs: list[ExchangeRateSyncPair] = []
+        if isinstance(raw_pairs, str):
+            candidates = [p.strip() for p in raw_pairs.split(",") if p.strip()]
+        elif isinstance(raw_pairs, list):
+            candidates = raw_pairs
+        else:
+            return bad_request("'pairs' must be a list or CSV string", "VALIDATION_ERROR")
+
+        for entry in candidates:
+            symbol = None
+            if isinstance(entry, str):
+                if "/" not in entry:
+                    return bad_request(
+                        "pair must look like FROM/TO (example: BTC/USDT)",
+                        "VALIDATION_ERROR",
+                    )
+                raw_from, raw_to = [part.strip() for part in entry.split("/", 1)]
+            elif isinstance(entry, dict):
+                raw_from = entry.get("from") or entry.get("from_currency")
+                raw_to = entry.get("to") or entry.get("to_currency")
+                symbol = entry.get("symbol") if isinstance(entry.get("symbol"), str) else None
+            else:
+                return bad_request("pair entries must be strings or objects", "VALIDATION_ERROR")
+
+            try:
+                from_currency = parse_currency_code(raw_from)
+                to_currency = parse_currency_code(raw_to)
+            except ValueError as exc:
+                return bad_request(str(exc), "VALIDATION_ERROR")
+            if from_currency == to_currency:
+                return bad_request("Currencies must differ", "VALIDATION_ERROR")
+            if currencies.get_currency(from_currency) is None or currencies.get_currency(to_currency) is None:
+                return bad_request("Currency not found", "CURRENCY_NOT_FOUND")
+
+            pairs.append(
+                ExchangeRateSyncPair(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    symbol=symbol,
+                )
+            )
+
+        try:
+            records = sync_exchange_rates(
+                currencies=currencies,
+                pairs=pairs,
+                provider=provider,
+            )
+        except ExchangeRateSyncError as exc:
+            return bad_request(str(exc), "EXCHANGE_FEED_ERROR")
+
+        users.append_audit(
+            actor_id=actor.user_id,
+            action=ACTION_EXCHANGE_RATE_SET,
+            target_id="SYNC",
+            details={
+                "provider": provider,
+                "pairs": [f"{p.from_currency}/{p.to_currency}" for p in pairs],
+                "count": len(records),
+                "source": provider,
+            },
+        )
+
+        return (
+            jsonify(
+                {
+                    "rates": [
+                        {
+                            "rate_id": r.rate_id,
+                            "from_currency": r.from_currency,
+                            "to_currency": r.to_currency,
+                            "rate": str(r.rate),
+                            "fee_rate": str(r.fee_rate),
+                            "source": r.source,
+                            "updated_at": r.updated_at,
+                        }
+                        for r in records
+                    ],
+                    "count": len(records),
+                    "provider": provider,
+                }
+            ),
+            200,
         )
 
     return bp
