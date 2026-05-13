@@ -51,6 +51,9 @@ class Permission(str, Enum):
     UNFREEZE_WALLET = "UNFREEZE_WALLET"
     VIEW_WALLETS = "VIEW_WALLETS"
     VIEW_TRANSFERS = "VIEW_TRANSFERS"
+    CREATE_CURRENCY = "CREATE_CURRENCY"
+    CREATE_TREASURY_WALLET = "CREATE_TREASURY_WALLET"
+    MANAGE_EXCHANGE_RATES = "MANAGE_EXCHANGE_RATES"
 
 
 # Role baselines — least-privilege by default.
@@ -97,6 +100,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # Own wallet ops — admins are users too.
         Permission.CREATE_WALLET.value,
         Permission.TRANSFER.value,
+        # Multi-currency admin ops (MC-1..MC-3).
+        Permission.CREATE_CURRENCY.value,
+        Permission.CREATE_TREASURY_WALLET.value,
+        Permission.MANAGE_EXCHANGE_RATES.value,
         # NOTE: MINT and VIEW_TRANSFERS are deliberately absent.
         # Grant them per-admin via `user_permissions` when needed.
     },
