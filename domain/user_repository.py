@@ -73,6 +73,14 @@ class UserRepositoryProtocol(Protocol):
 
     def activate_credentials(self, *, user_id: str, password_hash: str) -> None: ...
 
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None: ...
+
     def assign_role(self, *, user_id: str, role: str) -> None: ...
 
     def revoke_role(self, *, user_id: str, role: str) -> None: ...
@@ -96,6 +104,7 @@ class UserRepositoryProtocol(Protocol):
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None: ...
 
     # Permission overrides (Phase I.2)
@@ -107,6 +116,10 @@ class UserRepositoryProtocol(Protocol):
 
     def revoke_user_permission(self, *, user_id: str, permission: str) -> None: ...
 
+    def grant_role_permission(self, *, role: str, permission: str) -> None: ...
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None: ...
+
     # Audit log (Phase I.2)
     def append_audit(
         self,
@@ -117,7 +130,14 @@ class UserRepositoryProtocol(Protocol):
         details: dict[str, object] | None = None,
     ) -> None: ...
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]: ...
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]: ...
 
 
 class InMemoryUserStore:
@@ -195,6 +215,24 @@ class InMemoryUserStore:
             must_change_password=False,
         )
 
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None:
+        cred = self._creds.get(user_id)
+        if cred is None:
+            raise KeyError(user_id)
+        self._creds[user_id] = CredentialsRecord(
+            user_id=user_id,
+            password_hash=password_hash,
+            activation_code=None,
+            activated_at=cred.activated_at or "now",
+            must_change_password=must_change_password,
+        )
+
     def assign_role(self, *, user_id: str, role: str) -> None:
         self._roles.setdefault(user_id, [])
         if role not in self._roles[user_id]:
@@ -260,21 +298,35 @@ class InMemoryUserStore:
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None:
         rec = self._users.get(user_id)
         if rec is None:
             raise KeyError(user_id)
+        # Email index — keep in sync so future username/email lookups
+        # remain consistent after profile edits. Mirrors the UNIQUE
+        # constraint on `users.email` in PostgreSQL so both adapters
+        # raise the same domain error.
         new_email = rec.email if email is None else email
-        # Keep the email index in sync so future username/email lookups
-        # remain consistent after profile edits.
         if email is not None and email != rec.email:
+            if email and email in self._by_email:
+                raise EmailTakenError(email)
             if rec.email and rec.email in self._by_email:
                 del self._by_email[rec.email]
             if email:
                 self._by_email[email] = user_id
+        # Username index — Gap #6: self-service profile updates allow
+        # users to rename themselves. Reject conflicts up-front so the
+        # contract matches `create_user`.
+        new_username = rec.username if username is None else username
+        if username is not None and username != rec.username:
+            if username in self._by_username:
+                raise UsernameTakenError(username)
+            del self._by_username[rec.username]
+            self._by_username[username] = user_id
         self._users[user_id] = UserRecord(
             user_id=rec.user_id,
-            username=rec.username,
+            username=new_username,
             display_name=display_name if display_name is not None else rec.display_name,
             email=new_email,
             banned=rec.banned,
@@ -295,6 +347,13 @@ class InMemoryUserStore:
     def revoke_user_permission(self, *, user_id: str, permission: str) -> None:
         if user_id in self._user_overrides:
             self._user_overrides[user_id].discard(permission)
+
+    def grant_role_permission(self, *, role: str, permission: str) -> None:
+        self._role_overrides.setdefault(role, set()).add(permission)
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None:
+        if role in self._role_overrides:
+            self._role_overrides[role].discard(permission)
 
     # ── Audit log ──────────────────────────────────────────────────
 
@@ -318,5 +377,19 @@ class InMemoryUserStore:
             )
         )
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
-        return list(reversed(self._audit[-limit:]))
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]:
+        entries = list(reversed(self._audit))
+        if action:
+            entries = [e for e in entries if e.action == action]
+        if actor_id:
+            entries = [e for e in entries if e.actor_id == actor_id]
+        if target_id:
+            entries = [e for e in entries if e.target_id == target_id]
+        return entries[:limit]

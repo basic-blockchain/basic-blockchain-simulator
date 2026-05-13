@@ -2,11 +2,11 @@
 
 **Status:** active sprint — kicked off 2026-05-07.
 **Tracks:** simulator (this repo) + frontend (`basic-blockchain-frontend`).
-**Releases:** simulator v0.11.0 → v0.12.0 → v0.13.0 (one per sub-phase); frontend v0.7.0 (single release at the end).
+**Releases:** simulator v0.11.0 → v0.12.0 → v0.13.0 → v0.14.0 (one per sub-phase); frontend v0.7.0 → v0.8.0.
 
 ## Goal
 
-Convert the simulator from a free-for-all transaction endpoint into a usable wallet backend: real users with login, JWT identity, role-based authorisation, per-user wallets with balances, and transferences validated by short-lived per-wallet tokens with replay protection.
+Convert the simulator from a free-for-all transaction endpoint into a usable wallet backend: real users with login, JWT identity, role-based authorisation, per-user wallets with balances, and signed transfers validated with ECDSA + monotonic nonce replay protection.
 
 ## Decisions (locked, user-approved 2026-05-07)
 
@@ -76,12 +76,12 @@ Phase I.3 implements the Web3 wallet pattern: each wallet owns a secp256k1 keypa
 | I.3.3 | `domain/models.py` Transaction: add `sender_wallet_id`, `receiver_wallet_id`, `nonce: int`, `signature: str` (hex). Keep `sender`/`receiver` display strings for v0.6.0 frontend back-compat (resolved to username). `to_dict()` emits all fields. | `domain/models.py` |
 | I.3.4 | `domain/wallet.py`: `WalletService.create_wallet` generates the mnemonic, derives the keypair, persists ONLY the public key, returns `{wallet_id, public_key, mnemonic}`. `TransferService.build_transaction` verifies signature + monotonic nonce. `MintService` creates a coinbase transaction (system signature). + `infrastructure/postgres_wallet_store.py` | `domain/wallet.py`, `infrastructure/postgres_wallet_store.py` |
 | I.3.5 | `_mine` applies balance deltas in the same DB transaction as the block insert (idempotent: skip if already applied) | `basic-blockchain.py`, `infrastructure/postgres_wallet_store.py` |
-| I.3.6 | Endpoints: `POST /wallets` (returns mnemonic ONCE), `GET /wallets/me`, `POST /transactions` (requires `signature` + `nonce`), `POST /admin/mint`. The previous-plan `POST /wallets/<id>/token` is **removed** — the signature replaces the ephemeral token. | `api/wallet_routes.py` |
+| I.3.6 | Endpoints: `POST /wallets` (returns mnemonic ONCE), `GET /wallets/me`, `POST /transactions/signed` (requires `signature` + `nonce`), `POST /admin/mint`. The previous-plan `POST /wallets/<id>/token` is **removed** — the signature replaces the ephemeral token. The legacy `POST /transactions` remains for back-compat and does not move balances. | `api/wallet_routes.py` |
 | I.3.7 | `_validate_blocks` extension: each tx must reference existing wallets; signature must verify against `wallets.public_key`; nonce must be strictly greater than the last used nonce for that wallet (or the tx is reproducible from the chain itself); total balances == minted supply. | `domain/blockchain.py` |
 | I.3.8 | Tests: valid signature accepted; tampered signature rejected (403); nonce replay or decreasing rejected (409); freeze rejected (403); mint ADMIN-only; supply conservation; mnemonic→seed→keypair→sign→verify round-trip. | `tests/test_wallets.py`, `tests/test_transfers.py`, `tests/test_crypto.py`, `tests/test_supply_conservation.py` |
 | I.3.9 | Docs: data-model + ER (with `public_key`), api-reference (with "save your mnemonic" warning), BR-WL-01..N (signature mandatory, mnemonic returned once, supply conserved), releases/v0.13.0.md | docs |
 
-**Acceptance:** end-to-end transfer between two users using their mnemonic to sign locally; tampered signature rejected; nonce replay rejected; freeze rejected; mint ADMIN-only; supply conserved; mnemonic returned only on `POST /wallets` and never persisted in DB.
+**Acceptance:** end-to-end transfer between two users using their mnemonic to sign locally via `POST /transactions/signed`; tampered signature rejected; nonce replay rejected; freeze rejected; mint ADMIN-only; supply conserved; mnemonic returned only on `POST /wallets` and never persisted in DB.
 
 **Phase I.4 implications:** wallet creation flow shows the mnemonic in a forced modal with an "I have saved my recovery phrase" checkbox before the user can proceed. The transfer form takes the mnemonic as a local-only password input, derives the keypair in browser memory (`@scure/bip39` + `@noble/curves`), signs the canonical message, and only sends `{sender_wallet_id, receiver_wallet_id, amount, nonce, signature}` to the backend — the mnemonic itself never crosses the wire on transfer.
 
@@ -90,6 +90,20 @@ Phase I.3 implements the Web3 wallet pattern: each wallet owns a secp256k1 keypa
 Branch (frontend repo): `feat/auth-and-wallet-ui`.
 
 Detailed work items (H+B-style breakdown) live in the frontend's own copy of this doc — see `basic-blockchain-frontend/docs/phases/phase-i.md` once Phase I.4 starts.
+
+### Phase I.5 — Enriched admin API (sim **v0.14.0**, frontend **v0.8.0**)
+
+Branch: `feat/admin-enriched-api`.
+
+| ID | Work item | Files |
+|----|-----------|-------|
+| I.5.1 | V013 `users.deleted_at` + seed `DELETE_USER`, `RESTORE_USER` permissions | `migrations/versions/V013__admin_enriched.sql` |
+| I.5.2 | User profile edit, soft-delete, restore flows (audit on every action) | `api/admin_routes.py`, `infrastructure/postgres_user_store.py` |
+| I.5.3 | Wallet oversight endpoints: list all wallets, freeze/unfreeze | `api/admin_routes.py`, `infrastructure/postgres_wallet_store.py` |
+| I.5.4 | RBAC baselines updated for wallet oversight | `domain/permissions.py` |
+| I.5.5 | Docs + release notes updates | `docs/*`, `docs/releases/v0.14.0.md` |
+
+**Acceptance:** admin can edit profile fields, soft-delete and restore users, list wallets, and freeze/unfreeze wallets. All actions append to `audit_log` and are permission-gated.
 
 ## Phase J (out of scope, follow-up)
 
