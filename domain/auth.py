@@ -76,6 +76,13 @@ def generate_activation_code(length: int = 16) -> str:
     return "".join(secrets.choice(_ACTIVATION_ALPHABET) for _ in range(length))
 
 
+def generate_temp_password(length: int = 16) -> str:
+    """One-shot temporary password issued by an admin. Cryptographically secure;
+    mixed alphanumeric so it satisfies the 8-char minimum imposed at activation."""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 # ── User identifier ──────────────────────────────────────────────────────
 
 

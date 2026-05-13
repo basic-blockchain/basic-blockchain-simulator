@@ -12,9 +12,20 @@ from domain.models import Block, Transaction
 # and the Python-side grouping logic does not have to branch.
 _BLOCK_TX_SELECT = (
     "SELECT b.index, b.timestamp, b.proof, b.previous_hash, b.merkle_root, "
-    "       t.id, t.sender, t.receiver, t.amount "
+    "       t.id, t.sender, t.receiver, t.amount, t.receiver_amount, "
+    "       t.sender_wallet_id, t.receiver_wallet_id, t.nonce, t.signature "
     "FROM blocks b "
     "LEFT JOIN transactions t ON t.block_index = b.index"
+)
+
+_LAST_BLOCK_TX_SELECT = (
+    "SELECT b.index, b.timestamp, b.proof, b.previous_hash, b.merkle_root, "
+    "       t.id, t.sender, t.receiver, t.amount, t.receiver_amount, "
+    "       t.sender_wallet_id, t.receiver_wallet_id, t.nonce, t.signature "
+    "FROM blocks b "
+    "LEFT JOIN transactions t ON t.block_index = b.index "
+    "WHERE b.index = (SELECT MAX(index) FROM blocks) "
+    "ORDER BY t.id ASC"
 )
 
 
@@ -45,7 +56,16 @@ def _rows_to_blocks(rows: list[tuple]) -> list[Block]:
         txs_by_index[block_index].append(
             (
                 int(tx_id),
-                Transaction(sender=row[6], receiver=row[7], amount=Decimal(row[8])),
+                Transaction(
+                    sender=row[6],
+                    receiver=row[7],
+                    amount=Decimal(row[8]),
+                    receiver_amount=Decimal(row[9]) if row[9] is not None else None,
+                    sender_wallet_id=row[10] or "",
+                    receiver_wallet_id=row[11] or "",
+                    nonce=int(row[12] or 0),
+                    signature=row[13] or "",
+                ),
             )
         )
     for block_index, indexed_txs in txs_by_index.items():
@@ -86,21 +106,30 @@ class PostgresBlockRepository:
             )
             if block.transactions:
                 cur.executemany(
-                    "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                    "VALUES (%s, %s, %s, %s)",
+                    ""
+                    "INSERT INTO transactions "
+                    "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                    "",
                     [
-                        (block.index, tx.sender, tx.receiver, tx.amount)
+                        (
+                            block.index,
+                            tx.sender,
+                            tx.receiver,
+                            tx.amount,
+                            tx.receiver_amount,
+                            tx.sender_wallet_id,
+                            tx.receiver_wallet_id,
+                            tx.nonce,
+                            tx.signature,
+                        )
                         for tx in block.transactions
                     ],
                 )
 
     def last(self) -> Block:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                _BLOCK_TX_SELECT
-                + " WHERE b.index = (SELECT MAX(index) FROM blocks) "
-                "ORDER BY t.id ASC"
-            )
+            cur.execute(_LAST_BLOCK_TX_SELECT)
             rows = cur.fetchall()
         if not rows:
             raise IndexError("No blocks in repository")
@@ -126,10 +155,23 @@ class PostgresBlockRepository:
                 )
                 if b.transactions:
                     cur.executemany(
-                        "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                        "VALUES (%s, %s, %s, %s)",
+                        ""
+                        "INSERT INTO transactions "
+                        "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                        "",
                         [
-                            (b.index, tx.sender, tx.receiver, tx.amount)
+                            (
+                                b.index,
+                                tx.sender,
+                                tx.receiver,
+                                tx.amount,
+                                tx.receiver_amount,
+                                tx.sender_wallet_id,
+                                tx.receiver_wallet_id,
+                                tx.nonce,
+                                tx.signature,
+                            )
                             for tx in b.transactions
                         ],
                     )
@@ -144,15 +186,31 @@ class PostgresBlockRepository:
             return
         with self._connect() as conn, conn.cursor() as cur:
             cur.executemany(
-                "INSERT INTO transactions (block_index, sender, receiver, amount) "
-                "VALUES (%s, %s, %s, %s)",
-                [(block_index, tx.sender, tx.receiver, tx.amount) for tx in txs],
+                ""
+                "INSERT INTO transactions "
+                "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                "",
+                [
+                    (
+                        block_index,
+                        tx.sender,
+                        tx.receiver,
+                        tx.amount,
+                        tx.receiver_amount,
+                        tx.sender_wallet_id,
+                        tx.receiver_wallet_id,
+                        tx.nonce,
+                        tx.signature,
+                    )
+                    for tx in txs
+                ],
             )
 
     def get_confirmed_transactions(self) -> list[dict[str, object]]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT t.block_index, b.timestamp, t.sender, t.receiver, t.amount "
+                "SELECT t.block_index, b.timestamp, t.sender, t.receiver, t.amount, t.receiver_amount "
                 "FROM transactions t "
                 "JOIN blocks b ON b.index = t.block_index "
                 "ORDER BY t.block_index ASC, t.id ASC"
@@ -165,6 +223,7 @@ class PostgresBlockRepository:
                 "sender": row[2],
                 "receiver": row[3],
                 "amount": float(row[4]),
+                "receiver_amount": float(row[5]) if row[5] is not None else None,
             }
             for row in rows
         ]

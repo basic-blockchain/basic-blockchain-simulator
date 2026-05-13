@@ -26,7 +26,7 @@ re-validation.
 from __future__ import annotations
 
 import secrets
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import NamedTuple
 
 from domain.crypto import (
@@ -37,14 +37,17 @@ from domain.crypto import (
     public_key_hex,
     verify,
 )
+from domain.currency_repository import CurrencyRepositoryProtocol
 from domain.models import Transaction
 from domain.wallet_repository import (
+    CurrencyMismatchError,
     InsufficientBalanceError,
     NonceReplayError,
     WalletFrozenError,
     WalletNotFoundError,
     WalletRepositoryProtocol,
     WalletRecord,
+    WalletType,
 )
 
 
@@ -62,26 +65,66 @@ class CreatedWallet(NamedTuple):
     `WalletService.create_wallet` — never persisted."""
 
 
+class WalletMaterial(NamedTuple):
+    public_key: str
+    mnemonic: str
+
+
+class ExchangeRateNotFoundError(Exception):
+    """Raised when a cross-currency transfer has no configured rate."""
+
+
 class WalletService:
     def __init__(self, wallets: WalletRepositoryProtocol) -> None:
         self._wallets = wallets
 
-    def create_wallet(self, *, user_id: str) -> CreatedWallet:
-        wallet_id = "w_" + secrets.token_hex(8)
+    def generate_wallet_material(self) -> WalletMaterial:
         mnemonic = generate_mnemonic()
         seed = mnemonic_to_seed(mnemonic)
         _, public_key = derive_keypair(seed)
         pub_hex = public_key_hex(public_key)
+        del seed
+        return WalletMaterial(public_key=pub_hex, mnemonic=mnemonic)
+
+    def create_wallet(
+        self,
+        *,
+        user_id: str,
+        currency: str = "NATIVE",
+        wallet_type: str = WalletType.USER.value,
+    ) -> CreatedWallet:
+        wallet_id = "w_" + secrets.token_hex(8)
+        material = self.generate_wallet_material()
         self._wallets.create_wallet(
             wallet_id=wallet_id,
             user_id=user_id,
-            public_key=pub_hex,
+            public_key=material.public_key,
+            currency=currency,
+            wallet_type=wallet_type,
         )
-        # Wipe the seed/mnemonic locals as a mild defence-in-depth so
-        # they do not survive a long-lived reference. (The mnemonic
-        # itself still flows back to the caller in the return value.)
-        del seed
-        return CreatedWallet(wallet_id=wallet_id, public_key=pub_hex, mnemonic=mnemonic)
+        return CreatedWallet(
+            wallet_id=wallet_id,
+            public_key=material.public_key,
+            mnemonic=material.mnemonic,
+        )
+
+    def create_wallet_with_public_key(
+        self,
+        *,
+        user_id: str,
+        public_key: str,
+        currency: str = "NATIVE",
+        wallet_type: str = WalletType.USER.value,
+    ) -> CreatedWallet:
+        wallet_id = "w_" + secrets.token_hex(8)
+        self._wallets.create_wallet(
+            wallet_id=wallet_id,
+            user_id=user_id,
+            public_key=public_key,
+            currency=currency,
+            wallet_type=wallet_type,
+        )
+        return CreatedWallet(wallet_id=wallet_id, public_key=public_key, mnemonic="")
 
     def get_wallet(self, wallet_id: str) -> WalletRecord | None:
         return self._wallets.get_wallet(wallet_id)
@@ -113,8 +156,13 @@ class TransferService:
     is returned for the caller to drop into the mempool.
     """
 
-    def __init__(self, wallets: WalletRepositoryProtocol) -> None:
+    def __init__(
+        self,
+        wallets: WalletRepositoryProtocol,
+        currencies: CurrencyRepositoryProtocol,
+    ) -> None:
         self._wallets = wallets
+        self._currencies = currencies
 
     def build_transaction(
         self,
@@ -140,6 +188,26 @@ class TransferService:
         if sender.balance < amount:
             raise InsufficientBalanceError(sender_wallet_id)
 
+        receiver_amount = None
+        if sender.currency != receiver.currency:
+            rates = self._currencies.list_exchange_rates(
+                from_currency=sender.currency,
+                to_currency=receiver.currency,
+                limit=1,
+            )
+            if not rates:
+                raise ExchangeRateNotFoundError(
+                    f"No exchange rate for {sender.currency}/{receiver.currency}"
+                )
+            rate = rates[0]
+            unit = Decimal("0.00000001")
+            gross = (amount * rate.rate).quantize(unit, rounding=ROUND_DOWN)
+            fee = (gross * rate.fee_rate).quantize(unit, rounding=ROUND_DOWN)
+            net = (gross - fee).quantize(unit, rounding=ROUND_DOWN)
+            if net <= 0:
+                raise ValueError("Converted amount must be positive")
+            receiver_amount = net
+
         message = canonical_transfer_message(
             sender_wallet_id=sender_wallet_id,
             receiver_wallet_id=receiver_wallet_id,
@@ -157,6 +225,7 @@ class TransferService:
             sender=sender_username,
             receiver=receiver_username,
             amount=amount,
+            receiver_amount=receiver_amount,
             sender_wallet_id=sender_wallet_id,
             receiver_wallet_id=receiver_wallet_id,
             nonce=nonce,
@@ -223,6 +292,7 @@ def apply_block_deltas(
                 sender_wallet_id=tx.sender_wallet_id,
                 receiver_wallet_id=tx.receiver_wallet_id,
                 amount=tx.amount,
+                receiver_amount=tx.receiver_amount,
             )
         # else: legacy transaction without wallet IDs — chain records it
         # for history but no balance change.

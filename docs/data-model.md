@@ -14,6 +14,8 @@ class UserRecord:
     username:     str   # unique handle, login subject
     display_name: str
     email:        str | None
+    banned:       bool
+    deleted_at:   str | None
 
 @dataclass
 class CredentialsRecord:
@@ -45,7 +47,7 @@ class WalletRecord:
     currency:   str          # 'NATIVE' until Phase J
     balance:    Decimal      # NUMERIC(28,8); changes only when a block is mined
     public_key: str          # 33-byte secp256k1 compressed hex
-    frozen:     bool         # ADMIN can flip via /admin/users/<id>/freeze (Phase I.3 wires only the underlying capability; explicit endpoint lands later)
+    frozen:     bool         # ADMIN can flip via /admin/wallets/<id>/freeze
 ```
 
 Mnemonic-side state lives **only** in the response of
@@ -80,7 +82,11 @@ transaction makes `is_chain_valid()` return `False`.
 class Transaction:
     sender:   str    # Non-empty account identifier
     receiver: str    # Non-empty account identifier; must differ from sender
-    amount:   float  # Positive numeric value; stored as NUMERIC(20,8) in DB
+    amount:   Decimal  # Positive numeric value; stored as NUMERIC(20,8) in DB
+    sender_wallet_id: str  # Wallet ID for signed transfers (Phase I.3)
+    receiver_wallet_id: str
+    nonce: int
+    signature: str
 ```
 
 ---
@@ -105,6 +111,10 @@ erDiagram
         text            sender
         text            receiver
         numeric_20_8    amount          "CHECK amount > 0"
+        varchar         sender_wallet_id
+        varchar         receiver_wallet_id
+        bigint          nonce
+        text            signature
     }
 
     mempool {
@@ -112,6 +122,10 @@ erDiagram
         text            sender
         text            receiver
         numeric_20_8    amount          "CHECK amount > 0"
+        varchar         sender_wallet_id
+        varchar         receiver_wallet_id
+        bigint          nonce
+        text            signature
         timestamptz     created_at
     }
 
@@ -124,6 +138,8 @@ erDiagram
         varchar      username     UK  "1..64 chars, login handle"
         varchar      display_name
         varchar      email        UK  "optional"
+        boolean      banned
+        timestamptz  deleted_at
         timestamptz  created_at
         timestamptz  updated_at
     }
@@ -212,7 +228,11 @@ classDiagram
     class Transaction {
         +str sender
         +str receiver
-        +float amount
+        +Decimal amount
+        +str sender_wallet_id
+        +str receiver_wallet_id
+        +int nonce
+        +str signature
         +to_dict() dict
     }
 

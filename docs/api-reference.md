@@ -39,11 +39,12 @@ the response; check server logs for correlation.
 
 ## Authentication (Phase I.1, v0.11.0)
 
-The simulator issues Bearer JWTs (HS256, default 30-minute TTL). Most write
-endpoints will require the header `Authorization: Bearer <jwt>` once Phase
-I.2 / I.3 land; for v0.11.0 the auth surface is the four endpoints below
-plus a permissive middleware that decodes the token if present and
-attaches a `current_user` to the request context.
+The simulator issues Bearer JWTs (HS256, default 30-minute TTL). Routes
+that need authentication call `require_auth()` or are wrapped with
+`@require_permission(...)`. Public routes skip token parsing and include
+`/`, `/api/v1/health`, `/api/v1/chain`, `/api/v1/valid`, and
+`/api/v1/auth/*`. The middleware rejects malformed or expired tokens with
+401 and attaches `current_user` to the request context when valid.
 
 The following error codes are specific to the auth flow:
 
@@ -131,7 +132,7 @@ Requires `Authorization: Bearer <jwt>`.
 
 ---
 
-## Admin endpoints (Phase I.2, v0.12.0)
+## Admin endpoints (Phase I.2–I.5, v0.14.0)
 
 All admin routes require an authenticated user holding the right
 permission. Failures return:
@@ -141,18 +142,21 @@ permission. Failures return:
 | 401 | `AUTH_REQUIRED` | No bearer token on the request |
 | 403 | `FORBIDDEN` | Token is valid but the user lacks the gating permission |
 | 400 | `USER_NOT_FOUND` | The path `<id>` does not exist |
+| 400 | `USER_ALREADY_DELETED` | The user is already soft-deleted |
+| 400 | `USER_NOT_DELETED` | The user is not deleted (restore attempted) |
+| 400 | `WALLET_NOT_FOUND` | The wallet ID does not exist |
 | 400 | `SELF_ACTION_FORBIDDEN` | An admin attempts to ban / demote themselves |
 | 400 | `VALIDATION_ERROR` | Body shape, unknown role, unknown permission, etc. |
+| 400 | `EMAIL_TAKEN` | Email already used by another account |
 
-ADMIN's hardcoded baseline (in `domain/permissions.py`) covers **only**
-the user-management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`,
-`BAN_USER`, `UNBAN_USER`, `ASSIGN_ROLE`, `MANAGE_PERMISSIONS`,
-`VIEW_AUDIT_LOG`) plus their own wallet ops (`CREATE_WALLET`,
-`TRANSFER`). Financial-action and cross-user data permissions
-(`MINT`, `FREEZE_WALLET`, `UNFREEZE_WALLET`, `VIEW_WALLETS`,
-`VIEW_TRANSFERS`) are **not** in the baseline — even an ADMIN must
-self-grant them through `POST /admin/users/<self>/permissions` (the
-grant is audited).
+ADMIN's hardcoded baseline (in `domain/permissions.py`) covers the
+user-management cluster (`CREATE_USER`, `VIEW_USERS`, `UPDATE_USER`,
+`BAN_USER`, `UNBAN_USER`, `DELETE_USER`, `RESTORE_USER`, `ASSIGN_ROLE`,
+`MANAGE_PERMISSIONS`, `VIEW_AUDIT_LOG`) plus wallet oversight
+(`VIEW_WALLETS`, `FREEZE_WALLET`, `UNFREEZE_WALLET`) and their own wallet
+ops (`CREATE_WALLET`, `TRANSFER`). `MINT` and `VIEW_TRANSFERS` remain
+**outside** the baseline — even an ADMIN must self-grant them through
+`POST /admin/users/<self>/permissions` (the grant is audited).
 
 ### GET /api/v1/admin/users  *(permission VIEW_USERS)*
 
@@ -164,6 +168,41 @@ grant is audited).
   ],
   "count": 1
 }
+```
+
+### PATCH /api/v1/admin/users/<id>  *(permission UPDATE_USER)*
+
+Updates profile fields. Body is partial; only provided fields are updated.
+
+```json
+{ "display_name": "Alice Cooper", "email": "alice@new.example" }
+```
+
+**Response 200**
+```json
+{ "user_id": "…", "display_name": "Alice Cooper", "email": "alice@new.example" }
+```
+
+### DELETE /api/v1/admin/users/<id>  *(permission DELETE_USER)*
+
+Soft-deletes a user and freezes all their wallets.
+
+**Response 200**
+```json
+{ "user_id": "…", "deleted": true, "frozen_wallets": ["w_..."] }
+```
+
+### POST /api/v1/admin/users/<id>/restore  *(permission RESTORE_USER)*
+
+Restores a soft-deleted user. Optional `unfreeze_wallets` (default true).
+
+```json
+{ "unfreeze_wallets": true }
+```
+
+**Response 200**
+```json
+{ "user_id": "…", "restored": true, "unfrozen_wallets": ["w_..."] }
 ```
 
 ### POST /api/v1/admin/users/<id>/roles  *(permission ASSIGN_ROLE)*
@@ -181,7 +220,7 @@ Body: empty. Self-ban is rejected with `SELF_ACTION_FORBIDDEN`.
 A banned user cannot log in — login returns the uniform
 `AUTH_INVALID_CREDENTIALS` (no enumeration leak). Existing JWTs
 remain valid until they expire; revoke-on-ban is out of scope
-for v0.12.0.
+for the current release.
 
 ### POST /api/v1/admin/users/<id>/unban  *(permission UNBAN_USER)*
 
@@ -211,6 +250,35 @@ Returns the most recent admin audit entries (newest first). Optional
 }
 ```
 
+### GET /api/v1/admin/wallets  *(permission VIEW_WALLETS)*
+
+Returns all wallets across users with owner metadata.
+
+```json
+{
+  "wallets": [
+    { "wallet_id": "w_...", "user_id": "...", "username": "alice",
+      "display_name": "Alice", "currency": "NATIVE", "balance": "100.0",
+      "public_key": "02f3...", "frozen": false }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/v1/admin/wallets/<wallet_id>/freeze  *(permission FREEZE_WALLET)*
+
+**Response 200**
+```json
+{ "wallet_id": "w_...", "frozen": true }
+```
+
+### POST /api/v1/admin/wallets/<wallet_id>/unfreeze  *(permission UNFREEZE_WALLET)*
+
+**Response 200**
+```json
+{ "wallet_id": "w_...", "frozen": false }
+```
+
 ---
 
 ## Wallet endpoints (Phase I.3, v0.13.0)
@@ -229,6 +297,17 @@ f"{sender_wallet_id}:{receiver_wallet_id}:{amount}:{nonce}"
 positive integer strictly greater than the wallet's last accepted
 nonce. The reference Python helper is
 `domain.crypto.canonical_transfer_message(...)`.
+
+Common error codes for wallet endpoints:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `WALLET_NOT_FOUND` | Unknown wallet ID |
+| 400 | `WALLET_FROZEN` | Wallet is frozen |
+| 400 | `INSUFFICIENT_BALANCE` | Sender lacks funds |
+| 400 | `SIGNATURE_INVALID` | Signature fails verification |
+| 400 | `NONCE_REPLAY` | Nonce is not strictly greater |
+| 400 | `WALLET_OWNERSHIP` | Caller does not own sender wallet |
 
 ### POST /api/v1/wallets  *(permission CREATE_WALLET)*
 
@@ -704,6 +783,144 @@ These endpoints will be deprecated in a future release.
 
 ---
 
+## Admin: Exchange Rates (Phase I.4, v1.5.0)
+
+Admins with `MANAGE_EXCHANGE_RATES` permission can list, manually set, or sync
+exchange rates from external providers.
+
+### `GET /admin/exchange-rates`
+
+List all exchange rates in the catalog.
+
+**Query Parameters:**
+- `from` (optional): Filter by source currency (exact match)
+- `to` (optional): Filter by target currency (exact match)
+- `limit` (optional, default 100): Max results to return
+
+**Response (200 OK):**
+```json
+{
+  "rates": [
+    {
+      "rate_id": 1,
+      "from_currency": "BTC",
+      "to_currency": "USDT",
+      "rate": "80700.50",
+      "fee_rate": "0.01",
+      "source": "BINANCE",
+      "updated_at": "2026-05-12T12:30:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### `PUT /admin/exchange-rates/<FROM>/<TO>`
+
+Set a manual exchange rate (not synced from external sources).
+
+**Request:**
+```json
+{
+  "rate": 80700.50,
+  "fee_rate": 0.01
+}
+```
+
+**Response (201 Created):**
+Same structure as GET, with status 201.
+
+**Errors:**
+- `VALIDATION_ERROR`: rate/fee_rate invalid or currencies identical
+- `CURRENCY_NOT_FOUND`: source or target currency not in catalog
+- `AUTH_INSUFFICIENT_PERMISSION`: user lacks `MANAGE_EXCHANGE_RATES`
+
+### `POST /admin/exchange-rates/sync`
+
+Sync exchange rates from an external provider (Binance, Crypto.com).
+
+**Request:**
+```json
+{
+  "provider": "CRYPTO_COM",
+  "pairs": ["BTC/USDT", "ETH/USDT"]
+}
+```
+
+**Supported Providers:**
+- `BINANCE` – Binance spot API v3
+  - Symbol format: no separator (e.g., `BTCUSDT`)
+  - Endpoint: `https://api.binance.com/api/v3/ticker/price?symbol={PAIR}`
+  
+- `CRYPTO_COM` – Crypto.com v2 public API
+  - Symbol format: underscore-separated (e.g., `BTC_USDT`)
+  - Endpoint: `https://api.crypto.com/v2/public/get-ticker?instrument_name={PAIR}`
+
+**Pairs Array:**
+- Can be a list of strings: `["BTC/USDT", "ETH/USDT"]`
+- Or a CSV string: `pairs_csv: "BTC/USDT,ETH/USDT"`
+- Each pair must be two distinct active currencies in the catalog
+
+**Response (200 OK):**
+```json
+{
+  "rates": [
+    {
+      "rate_id": 2,
+      "from_currency": "BTC",
+      "to_currency": "USDT",
+      "rate": "80700.38",
+      "fee_rate": "0",
+      "source": "CRYPTO_COM",
+      "updated_at": "2026-05-12T12:35:00Z"
+    },
+    {
+      "rate_id": 3,
+      "from_currency": "ETH",
+      "to_currency": "USDT",
+      "rate": "2283.55",
+      "fee_rate": "0",
+      "source": "CRYPTO_COM",
+      "updated_at": "2026-05-12T12:35:00Z"
+    }
+  ],
+  "count": 2,
+  "provider": "CRYPTO_COM"
+}
+```
+
+**Errors:**
+- `VALIDATION_ERROR`: invalid provider, pairs format, or currencies
+- `CURRENCY_NOT_FOUND`: one or more currencies not in catalog
+- `EXCHANGE_FEED_ERROR`: external API unavailable or returned invalid data
+  - Example: `"Crypto.com response missing price for BTC_USDT"`
+- `AUTH_INSUFFICIENT_PERMISSION`: user lacks `MANAGE_EXCHANGE_RATES`
+
+**Example (Crypto.com):**
+```bash
+TOKEN="eyJhbGciOi..."
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "provider": "CRYPTO_COM",
+    "pairs": ["BTC/USDT", "ETH/USDT"]
+  }'
+```
+
+**Example (Binance):**
+```bash
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "provider": "BINANCE",
+    "pairs": ["BTC/USDT", "ETH/USDT"]
+  }'
+```
+
+---
+
 ## Quick Reference
 
 ```bash
@@ -737,6 +954,16 @@ curl http://localhost:5000/api/v1/health
 
 # Metrics
 curl http://localhost:5000/api/v1/metrics
+
+# List exchange rates
+curl http://localhost:5000/api/v1/admin/exchange-rates \
+  -H "Authorization: Bearer $TOKEN"
+
+# Sync exchange rates from Crypto.com
+curl -X POST http://localhost:5000/api/v1/admin/exchange-rates/sync \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"provider":"CRYPTO_COM","pairs":["BTC/USDT","ETH/USDT"]}'
 
 # WebSocket (requires wscat or similar)
 wscat -c ws://localhost:5000/api/v1/ws

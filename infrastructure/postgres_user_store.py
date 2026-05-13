@@ -13,6 +13,7 @@ import json
 
 import psycopg2
 from psycopg2 import errorcodes
+from psycopg2 import sql
 from psycopg2.extras import Json
 
 from domain.audit import AuditEntry
@@ -117,12 +118,17 @@ class PostgresUserStore:
         user_id: str,
         display_name: str | None,
         email: str | None,
+        username: str | None = None,
     ) -> None:
-        # Build SET clause dynamically so callers can update either field
-        # in isolation. `updated_at = now()` is always touched so the row
-        # carries an audit trail of the most recent admin edit.
+        # Build SET clause dynamically so callers can update any subset
+        # of (username, display_name, email) in isolation. `updated_at =
+        # now()` is always touched so the row carries an audit trail of
+        # the most recent edit (admin or self-service — Gap #6).
         sets: list[str] = []
         params: list[object] = []
+        if username is not None:
+            sets.append("username = %s")
+            params.append(username)
         if display_name is not None:
             sets.append("display_name = %s")
             params.append(display_name)
@@ -131,18 +137,22 @@ class PostgresUserStore:
             params.append(email)
         if not sets:
             return
-        sets.append("updated_at = now()")
         params.append(user_id)
         try:
             with self._connect() as conn, conn.cursor() as cur:
+                assignments = [sql.SQL(part) for part in sets]
                 cur.execute(
-                    f"UPDATE users SET {', '.join(sets)} WHERE user_id = %s",
+                    sql.SQL("UPDATE users SET {}, updated_at = now() WHERE user_id = %s").format(
+                        sql.SQL(", ").join(assignments)
+                    ),
                     params,
                 )
                 if cur.rowcount == 0:
                     raise KeyError(user_id)
         except psycopg2.errors.UniqueViolation as exc:
             constraint = (exc.diag.constraint_name or "").lower()
+            if "username" in constraint:
+                raise UsernameTakenError(username or "") from exc
             if "email" in constraint:
                 raise EmailTakenError(email or "") from exc
             raise
@@ -195,6 +205,24 @@ class PostgresUserStore:
                 "WHERE user_id = %s",
                 (password_hash, user_id),
             )
+
+    def set_password(
+        self,
+        *,
+        user_id: str,
+        password_hash: str,
+        must_change_password: bool = False,
+    ) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE user_credentials "
+                "SET password_hash = %s, must_change_password = %s, "
+                "    activation_code = NULL, updated_at = now() "
+                "WHERE user_id = %s",
+                (password_hash, must_change_password, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
 
     # ── Roles ─────────────────────────────────────────────────────────
 
@@ -254,6 +282,21 @@ class PostgresUserStore:
                 (user_id, permission),
             )
 
+    def grant_role_permission(self, *, role: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO role_permissions (role, permission_id) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (role, permission),
+            )
+
+    def revoke_role_permission(self, *, role: str, permission: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM role_permissions WHERE role = %s AND permission_id = %s",
+                (role, permission),
+            )
+
     # ── Audit log (Phase I.2) ─────────────────────────────────────
 
     def append_audit(
@@ -271,12 +314,40 @@ class PostgresUserStore:
                 (actor_id, action, target_id, Json(details or {})),
             )
 
-    def recent_audit(self, limit: int = 50) -> list[AuditEntry]:
+    def recent_audit(
+        self,
+        limit: int = 50,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AuditEntry]:
+        conditions: list[sql.SQL] = []
+        params: list[object] = []
+        if action:
+            conditions.append(sql.SQL("action = %s"))
+            params.append(action)
+        if actor_id:
+            conditions.append(sql.SQL("actor_id = %s"))
+            params.append(actor_id)
+        if target_id:
+            conditions.append(sql.SQL("target_id = %s"))
+            params.append(target_id)
+        where = (
+            sql.SQL(" WHERE ") + sql.SQL(" AND ").join(conditions)
+            if conditions
+            else sql.SQL("")
+        )
+        params.append(limit)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT id, actor_id, action, target_id, details, created_at "
-                "FROM audit_log ORDER BY id DESC LIMIT %s",
-                (limit,),
+                sql.SQL(
+                    "SELECT id, actor_id, action, target_id, details, created_at "
+                    "FROM audit_log"
+                )
+                + where
+                + sql.SQL(" ORDER BY id DESC LIMIT %s"),
+                params,
             )
             rows = cur.fetchall()
         return [
