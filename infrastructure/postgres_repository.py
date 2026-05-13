@@ -18,6 +18,16 @@ _BLOCK_TX_SELECT = (
     "LEFT JOIN transactions t ON t.block_index = b.index"
 )
 
+_LAST_BLOCK_TX_SELECT = (
+    "SELECT b.index, b.timestamp, b.proof, b.previous_hash, b.merkle_root, "
+    "       t.id, t.sender, t.receiver, t.amount, t.receiver_amount, "
+    "       t.sender_wallet_id, t.receiver_wallet_id, t.nonce, t.signature "
+    "FROM blocks b "
+    "LEFT JOIN transactions t ON t.block_index = b.index "
+    "WHERE b.index = (SELECT MAX(index) FROM blocks) "
+    "ORDER BY t.id ASC"
+)
+
 
 def _rows_to_blocks(rows: list[tuple]) -> list[Block]:
     """Group flat (block × tx) rows into Block instances with `transactions`.
@@ -119,11 +129,7 @@ class PostgresBlockRepository:
 
     def last(self) -> Block:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                _BLOCK_TX_SELECT
-                + " WHERE b.index = (SELECT MAX(index) FROM blocks) "
-                "ORDER BY t.id ASC"
-            )
+            cur.execute(_LAST_BLOCK_TX_SELECT)
             rows = cur.fetchall()
         if not rows:
             raise IndexError("No blocks in repository")

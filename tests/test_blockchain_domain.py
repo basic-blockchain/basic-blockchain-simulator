@@ -47,6 +47,7 @@ def test_transaction_serializes_to_dict():
         "sender": "alice",
         "receiver": "bob",
         "amount": 42.5,
+        "receiver_amount": None,
         "sender_wallet_id": "",
         "receiver_wallet_id": "",
         "nonce": 0,
