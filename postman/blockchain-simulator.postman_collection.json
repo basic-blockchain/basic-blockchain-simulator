@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Blockchain Simulator v1",
-    "description": "Complete REST API collection for the Blockchain Simulator.\n\n## Folders\n| Folder | Responsibility |\n|--------|---------------|\n| 🔌 Node Status | Root endpoint — node metadata and route index |\n| ⛏ Mining | Mine blocks via Proof-of-Work |\n| 📋 Mempool | Submit and inspect pending transactions |\n| 🔗 Chain | Read and validate the blockchain |\n| 🌐 Peer Network | Register nodes and run longest-chain consensus |\n| 📊 Observability | Health checks and operational metrics |\n\n## Setup\n1. Import `blockchain-simulator.postman_environment.json`.\n2. Select **Blockchain Simulator — Local** as the active environment.\n3. Start the server: `python basic-blockchain.py`.\n4. Run the **🔌 Node Status / API Index** request to verify connectivity.\n\n## Auto-populated variables\nRequests with test scripts automatically store values into environment variables:\n- `last_block_index`, `last_proof` — set after each mine.\n- `chain_length` — set after Get Chain.\n- `pending_tx_count` — set after Get Pending Transactions.\n- `chain_is_valid` — set after Validate Chain.\n- `consensus_replaced` — set after Resolve Consensus.",
+    "description": "Complete REST API collection for the Blockchain Simulator.\n\n## Folders\n| Folder | Responsibility |\n|--------|---------------|\n| 🔌 Node Status | Root endpoint — node metadata and route index |\n| 🔐 Auth | Register, activate, login, profile |\n| 👛 Wallets | Create wallets, signed transfers |\n| 🛡 Admin | User + wallet administration, minting |\n| ⛏ Mining | Mine blocks via Proof-of-Work |\n| 📋 Mempool | Submit and inspect pending transactions |\n| 🔗 Chain | Read and validate the blockchain |\n| 🌐 Peer Network | Register nodes and run longest-chain consensus |\n| 📊 Observability | Health checks and operational metrics |\n\n## Setup\n1. Import `blockchain-simulator.postman_environment.json`.\n2. Select **Blockchain Simulator — Local** as the active environment.\n3. Start the server: `python basic-blockchain.py`.\n4. Run the **🔌 Node Status / API Index** request to verify connectivity.\n\n## Auto-populated variables\nRequests with test scripts automatically store values into environment variables:\n- `activation_code`, `access_token`, `user_id` — set after auth requests.\n- `last_block_index`, `last_proof` — set after each mine.\n- `chain_length` — set after Get Chain.\n- `pending_tx_count` — set after Get Pending Transactions.\n- `chain_is_valid` — set after Validate Chain.\n- `consensus_replaced` — set after Resolve Consensus.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "version": {
@@ -77,7 +77,7 @@
                 "method": "GET",
                 "url": { "raw": "{{api_base}}/" }
               },
-              "body": "{\n  \"node\": \"Blockchain Simulator\",\n  \"version\": \"v1\",\n  \"routes\": {\n    \"mine\": \"/api/v1/mine_block\",\n    \"chain\": \"/api/v1/chain\",\n    \"valid\": \"/api/v1/valid\",\n    \"transactions\": \"/api/v1/transactions\",\n    \"pending\": \"/api/v1/transactions/pending\",\n    \"health\": \"/api/v1/health\",\n    \"metrics\": \"/api/v1/metrics\",\n    \"nodes\": \"/api/v1/nodes\",\n    \"register\": \"/api/v1/nodes/register\",\n    \"resolve\": \"/api/v1/nodes/resolve\",\n    \"ws\": \"/api/v1/ws\"\n  }\n}"
+              "body": "{\n  \"node\": \"Blockchain Simulator\",\n  \"version\": \"v1\",\n  \"routes\": {\n    \"mine\": \"/api/v1/mine_block\",\n    \"chain\": \"/api/v1/chain\",\n    \"valid\": \"/api/v1/valid\",\n    \"transactions\": \"/api/v1/transactions\",\n    \"transactions_signed\": \"/api/v1/transactions/signed\",\n    \"pending\": \"/api/v1/transactions/pending\",\n    \"auth_register\": \"/api/v1/auth/register\",\n    \"auth_activate\": \"/api/v1/auth/activate\",\n    \"auth_login\": \"/api/v1/auth/login\",\n    \"auth_me\": \"/api/v1/auth/me\",\n    \"wallets\": \"/api/v1/wallets\",\n    \"wallets_me\": \"/api/v1/wallets/me\",\n    \"admin_users\": \"/api/v1/admin/users\",\n    \"admin_wallets\": \"/api/v1/admin/wallets\",\n    \"admin_mint\": \"/api/v1/admin/mint\",\n    \"admin_audit\": \"/api/v1/admin/audit\",\n    \"health\": \"/api/v1/health\",\n    \"metrics\": \"/api/v1/metrics\",\n    \"nodes\": \"/api/v1/nodes\",\n    \"register\": \"/api/v1/nodes/register\",\n    \"resolve\": \"/api/v1/nodes/resolve\",\n    \"ws\": \"/api/v1/ws\"\n  }\n}"
             }
           ]
         }
@@ -133,18 +133,502 @@
               "name": "200 OK — Block mined",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "POST", "url": { "raw": "{{api_base}}/mine_block" } },
-              "body": "{\n  \"message\": \"A block is MINED\",\n  \"index\": 2,\n  \"timestamp\": \"2026-04-23T21:12:44.123456\",\n  \"proof\": 84530,\n  \"previous_hash\": \"00000a3f...\",\n  \"transactions\": []\n}"
+              "originalRequest": {
+                "method": "POST",
+                "url": { "raw": "{{api_base}}/mine_block" }
+              },
+              "body": "{\n  \"message\": \"A block is MINED\",\n  \"index\": 2,\n  \"timestamp\": \"2026-04-23T21:12:44.123456\",\n  \"proof\": 84530,\n  \"previous_hash\": \"00000a3f...\",\n  \"merkle_root\": \"abcdef...\",\n  \"transactions\": []\n}"
             },
             {
               "name": "429 Rate Limited",
               "status": "Too Many Requests",
               "code": 429,
-              "originalRequest": { "method": "POST", "url": { "raw": "{{api_base}}/mine_block" } },
+              "originalRequest": {
+                "method": "POST",
+                "url": { "raw": "{{api_base}}/mine_block" }
+              },
               "header": [{ "key": "Retry-After", "value": "42" }],
               "body": "{\n  \"error\": \"Too many requests. Limit: 5 per 60 seconds.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retry_after_seconds\": 42\n}"
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "🔐 Auth",
+      "description": "Register, activate, log in, and fetch the current profile.\n\nAuth endpoints are public except for /auth/me, which requires a Bearer token.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/auth/register",
+              "host": ["{{api_base}}"],
+              "path": ["auth", "register"]
+            },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"display_name\": \"{{display_name}}\",\n  \"email\": \"{{email}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Create a new user and receive an activation code.\n\nThe activation code is shown only once on this response."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.environment.set('activation_code', json.activation_code);",
+                  "pm.environment.set('user_id', json.user_id);",
+                  "pm.environment.set('username', json.username);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "originalRequest": {
+                "method": "POST",
+                "url": { "raw": "{{api_base}}/auth/register" }
+              },
+              "body": "{\n  \"message\": \"User registered. Use the activation code to set your password.\",\n  \"user_id\": \"b4ff...d7\",\n  \"username\": \"alice\",\n  \"activation_code\": \"8VKQ2YQ7B3HXCZNT\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Activate",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/auth/activate",
+              "host": ["{{api_base}}"],
+              "path": ["auth", "activate"]
+            },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"activation_code\": \"{{activation_code}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Activate the account using the one-time activation code."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/auth/login",
+              "host": ["{{api_base}}"],
+              "path": ["auth", "login"]
+            },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Login and store the JWT for authenticated requests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.environment.set('access_token', json.access_token);",
+                  "pm.environment.set('user_id', json.user_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_base}}/auth/me",
+              "host": ["{{api_base}}"],
+              "path": ["auth", "me"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "description": "Fetch the current authenticated profile."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "👛 Wallets",
+      "description": "Wallet creation, listing, and signed transfers.\n\nAll endpoints require a Bearer token.",
+      "item": [
+        {
+          "name": "Create Wallet",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/wallets",
+              "host": ["{{api_base}}"],
+              "path": ["wallets"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "description": "Create a new wallet and store the returned wallet_id and mnemonic."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.environment.set('wallet_id', json.wallet_id);",
+                  "pm.environment.set('wallet_public_key', json.public_key);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List My Wallets",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_base}}/wallets/me",
+              "host": ["{{api_base}}"],
+              "path": ["wallets", "me"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Signed Transfer",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/transactions/signed",
+              "host": ["{{api_base}}"],
+              "path": ["transactions", "signed"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sender_wallet_id\": \"{{wallet_id}}\",\n  \"receiver_wallet_id\": \"{{receiver_wallet_id}}\",\n  \"amount\": {{transfer_amount}},\n  \"nonce\": {{transfer_nonce}},\n  \"signature\": \"{{transfer_signature}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Submit a signed transfer. Use a valid signature generated from the sender wallet's mnemonic."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🛡 Admin",
+      "description": "Admin-only user and wallet management.\n\nAll endpoints require a Bearer token with the proper permissions.",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_base}}/admin/users",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"{{admin_display_name}}\",\n  \"email\": \"{{admin_email}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "Ban User",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/ban",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "ban"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Unban User",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/unban",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "unban"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Soft Delete User",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Restore User",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/restore",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "restore"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unfreeze_wallets\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "Grant Role",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/roles",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "roles"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"grant\",\n  \"role\": \"{{role_name}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "Revoke Role",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/roles",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "roles"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"revoke\",\n  \"role\": \"{{role_name}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "Grant Permission",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/permissions",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "permissions"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"grant\",\n  \"permission\": \"{{permission_name}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "Revoke Permission",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/users/{{admin_user_id}}/permissions",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "users", "{{admin_user_id}}", "permissions"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"revoke\",\n  \"permission\": \"{{permission_name}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "List Wallets",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_base}}/admin/wallets",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "wallets"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Freeze Wallet",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/wallets/{{admin_wallet_id}}/freeze",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "wallets", "{{admin_wallet_id}}", "freeze"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Unfreeze Wallet",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/wallets/{{admin_wallet_id}}/unfreeze",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "wallets", "{{admin_wallet_id}}", "unfreeze"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Mint",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{api_base}}/admin/mint",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "mint"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallet_id\": \"{{admin_wallet_id}}\",\n  \"amount\": {{mint_amount}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Requires MINT permission (not in ADMIN baseline by default)."
+          }
+        },
+        {
+          "name": "Audit Log",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_base}}/admin/audit",
+              "host": ["{{api_base}}"],
+              "path": ["admin", "audit"]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ]
+          }
         }
       ]
     },
@@ -200,7 +684,10 @@
               "originalRequest": {
                 "method": "POST",
                 "url": { "raw": "{{api_base}}/transactions" },
-                "body": { "mode": "raw", "raw": "{\"sender\":\"alice\",\"receiver\":\"bob\",\"amount\":10.5}" }
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"sender\":\"alice\",\"receiver\":\"bob\",\"amount\":10.5}"
+                }
               },
               "body": "{\n  \"message\": \"Transaction added\",\n  \"transaction\": {\n    \"sender\": \"alice\",\n    \"receiver\": \"bob\",\n    \"amount\": 10.5\n  }\n}"
             },
@@ -211,7 +698,10 @@
               "originalRequest": {
                 "method": "POST",
                 "url": { "raw": "{{api_base}}/transactions" },
-                "body": { "mode": "raw", "raw": "{\"sender\":\"alice\",\"receiver\":\"alice\",\"amount\":10}" }
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"sender\":\"alice\",\"receiver\":\"alice\",\"amount\":10}"
+                }
               },
               "body": "{\n  \"error\": \"sender and receiver must differ\",\n  \"code\": \"VALIDATION_ERROR\"\n}"
             },
@@ -222,7 +712,10 @@
               "originalRequest": {
                 "method": "POST",
                 "url": { "raw": "{{api_base}}/transactions" },
-                "body": { "mode": "raw", "raw": "{\"sender\":\"alice\",\"receiver\":\"bob\",\"amount\":-5}" }
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"sender\":\"alice\",\"receiver\":\"bob\",\"amount\":-5}"
+                }
               },
               "body": "{\n  \"error\": \"amount must be positive\",\n  \"code\": \"VALIDATION_ERROR\"\n}"
             }
@@ -237,9 +730,7 @@
               "host": ["{{api_base}}"],
               "path": ["transactions"]
             },
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"sender\":   \"alice\",\n  \"receiver\": \"alice\",\n  \"amount\":   10\n}",
@@ -271,9 +762,7 @@
               "host": ["{{api_base}}"],
               "path": ["transactions"]
             },
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"sender\":   \"alice\",\n  \"receiver\": \"bob\",\n  \"amount\":   -1\n}",
@@ -332,7 +821,10 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/transactions/pending" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/transactions/pending" }
+              },
               "body": "{\n  \"transactions\": [\n    { \"sender\": \"alice\", \"receiver\": \"bob\", \"amount\": 10.5 }\n  ],\n  \"count\": 1\n}"
             }
           ]
@@ -383,8 +875,11 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/chain" } },
-              "body": "{\n  \"chain\": [\n    {\n      \"index\": 1,\n      \"timestamp\": \"2026-04-23T20:00:00.000000\",\n      \"proof\": 1,\n      \"previous_hash\": \"0\"\n    },\n    {\n      \"index\": 2,\n      \"timestamp\": \"2026-04-23T20:01:10.123456\",\n      \"proof\": 84530,\n      \"previous_hash\": \"00000a3f...\"\n    }\n  ],\n  \"length\": 2\n}"
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/chain" }
+              },
+              "body": "{\n  \"chain\": [\n    {\n      \"index\": 1,\n      \"timestamp\": \"2026-04-23T20:00:00.000000\",\n      \"proof\": 1,\n      \"previous_hash\": \"0\",\n      \"merkle_root\": \"e3b0c442...\",\n      \"transactions\": []\n    },\n    {\n      \"index\": 2,\n      \"timestamp\": \"2026-04-23T20:01:10.123456\",\n      \"proof\": 84530,\n      \"previous_hash\": \"00000a3f...\",\n      \"merkle_root\": \"abcdef...\",\n      \"transactions\": [\n        { \"sender\": \"alice\", \"receiver\": \"bob\", \"amount\": 10.5 }\n      ]\n    }\n  ],\n  \"length\": 2\n}"
             }
           ]
         },
@@ -427,14 +922,20 @@
               "name": "200 OK — valid",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/valid" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/valid" }
+              },
               "body": "{ \"message\": \"The Blockchain is valid.\", \"valid\": true }"
             },
             {
               "name": "200 OK — invalid",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/valid" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/valid" }
+              },
               "body": "{ \"message\": \"The Blockchain is not valid.\", \"valid\": false }"
             }
           ]
@@ -454,9 +955,7 @@
               "host": ["{{api_base}}"],
               "path": ["nodes", "register"]
             },
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"nodes\": [\n    \"{{peer_url}}\"\n  ]\n}",
@@ -490,7 +989,10 @@
               "originalRequest": {
                 "method": "POST",
                 "url": { "raw": "{{api_base}}/nodes/register" },
-                "body": { "mode": "raw", "raw": "{\"nodes\":[\"http://127.0.0.1:5001\"]}" }
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"nodes\":[\"http://127.0.0.1:5001\"]}"
+                }
               },
               "body": "{\n  \"message\": \"Nodes registered\",\n  \"total\": 1,\n  \"nodes\": [\"http://127.0.0.1:5001\"]\n}"
             },
@@ -516,9 +1018,7 @@
               "host": ["{{api_base}}"],
               "path": ["nodes", "register"]
             },
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"nodes\": [\n    \"http://127.0.0.1:5001\",\n    \"http://127.0.0.1:5002\",\n    \"localhost:5003\"\n  ]\n}",
@@ -576,7 +1076,10 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/nodes" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/nodes" }
+              },
               "body": "{\n  \"nodes\": [\"http://127.0.0.1:5001\"],\n  \"total\": 1\n}"
             }
           ]
@@ -621,14 +1124,20 @@
               "name": "200 OK — replaced",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/nodes/resolve" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/nodes/resolve" }
+              },
               "body": "{\n  \"message\": \"Chain replaced with a longer one from a peer.\",\n  \"replaced\": true,\n  \"chain\": []\n}"
             },
             {
               "name": "200 OK — authoritative",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/nodes/resolve" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/nodes/resolve" }
+              },
               "body": "{\n  \"message\": \"Local chain is authoritative.\",\n  \"replaced\": false,\n  \"chain\": []\n}"
             }
           ]
@@ -677,21 +1186,30 @@
               "name": "200 OK — in-memory",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/health" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/health" }
+              },
               "body": "{ \"status\": \"ok\", \"db\": \"n/a\", \"chain_height\": 3 }"
             },
             {
               "name": "200 OK — PostgreSQL",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/health" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/health" }
+              },
               "body": "{ \"status\": \"ok\", \"db\": \"ok\", \"chain_height\": 3 }"
             },
             {
               "name": "503 Degraded",
               "status": "Service Unavailable",
               "code": 503,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/health" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/health" }
+              },
               "body": "{ \"status\": \"degraded\", \"db\": \"error\", \"chain_height\": 3 }"
             }
           ]
@@ -733,14 +1251,20 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/metrics" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/metrics" }
+              },
               "body": "{\n  \"chain_height\": 3,\n  \"pending_transactions\": 1,\n  \"avg_mine_time_seconds\": 12.345\n}"
             },
             {
               "name": "200 OK — genesis only",
               "status": "OK",
               "code": 200,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/metrics" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/metrics" }
+              },
               "body": "{\n  \"chain_height\": 1,\n  \"pending_transactions\": 0,\n  \"avg_mine_time_seconds\": null\n}"
             }
           ]
@@ -781,7 +1305,10 @@
               "name": "404 Not Found",
               "status": "Not Found",
               "code": 404,
-              "originalRequest": { "method": "GET", "url": { "raw": "{{api_base}}/does-not-exist" } },
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{api_base}}/does-not-exist" }
+              },
               "body": "{ \"error\": \"Not Found\", \"code\": \"NOT_FOUND\" }"
             }
           ]
@@ -821,9 +1348,7 @@
               "host": ["{{api_base}}"],
               "path": ["transactions"]
             },
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{ \"sender\": \"alice\" }",

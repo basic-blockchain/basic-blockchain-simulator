@@ -14,6 +14,7 @@ storage contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from decimal import Decimal
 from typing import Protocol
 
@@ -23,6 +24,7 @@ class WalletRecord:
     wallet_id: str
     user_id: str
     currency: str
+    wallet_type: str
     balance: Decimal
     public_key: str
     frozen: bool
@@ -42,9 +44,16 @@ class WalletAdminRecord:
     username: str
     display_name: str
     currency: str
+    wallet_type: str
     balance: Decimal
     public_key: str
     frozen: bool
+
+
+class WalletType(str, Enum):
+    USER = "USER"
+    TREASURY = "TREASURY"
+    FEE = "FEE"
 
 
 class WalletNotFoundError(Exception):
@@ -64,6 +73,10 @@ class InsufficientBalanceError(Exception):
     """Raised when a transfer / mint exceeds the sender's balance."""
 
 
+class CurrencyMismatchError(Exception):
+    """Raised when a transfer is attempted across different currencies."""
+
+
 class WalletRepositoryProtocol(Protocol):
     def create_wallet(
         self,
@@ -72,6 +85,7 @@ class WalletRepositoryProtocol(Protocol):
         user_id: str,
         public_key: str,
         currency: str = "NATIVE",
+        wallet_type: str = WalletType.USER.value,
     ) -> None: ...
 
     def get_wallet(self, wallet_id: str) -> WalletRecord | None: ...
@@ -94,6 +108,7 @@ class WalletRepositoryProtocol(Protocol):
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         """Debit sender, credit receiver in one transaction. Raises
         `InsufficientBalanceError` / `WalletFrozenError` on guard
@@ -114,6 +129,13 @@ class WalletRepositoryProtocol(Protocol):
         display_name. Used by the admin `/admin/wallets` endpoint."""
         ...
 
+    def find_wallet_by_type_currency(
+        self,
+        *,
+        wallet_type: str,
+        currency: str,
+    ) -> WalletRecord | None: ...
+
 
 class InMemoryWalletStore:
     """Wallet store that lives in process memory. Used by unit tests so
@@ -130,6 +152,7 @@ class InMemoryWalletStore:
         user_id: str,
         public_key: str,
         currency: str = "NATIVE",
+        wallet_type: str = WalletType.USER.value,
     ) -> None:
         if wallet_id in self._wallets:
             raise ValueError(f"Wallet {wallet_id} already exists")
@@ -137,6 +160,7 @@ class InMemoryWalletStore:
             wallet_id=wallet_id,
             user_id=user_id,
             currency=currency,
+            wallet_type=wallet_type,
             balance=Decimal(0),
             public_key=public_key,
             frozen=False,
@@ -156,6 +180,7 @@ class InMemoryWalletStore:
             wallet_id=w.wallet_id,
             user_id=w.user_id,
             currency=w.currency,
+            wallet_type=w.wallet_type,
             balance=w.balance,
             public_key=w.public_key,
             frozen=frozen,
@@ -175,6 +200,7 @@ class InMemoryWalletStore:
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         sender = self._wallets.get(sender_wallet_id)
         receiver = self._wallets.get(receiver_wallet_id)
@@ -188,11 +214,13 @@ class InMemoryWalletStore:
             raise WalletFrozenError(receiver_wallet_id)
         if sender.balance < amount:
             raise InsufficientBalanceError(sender_wallet_id)
+        credit_amount = receiver_amount if receiver_amount is not None else amount
         # Replace records with new balances (frozen-state preserving).
         self._wallets[sender_wallet_id] = WalletRecord(
             wallet_id=sender.wallet_id,
             user_id=sender.user_id,
             currency=sender.currency,
+            wallet_type=sender.wallet_type,
             balance=sender.balance - amount,
             public_key=sender.public_key,
             frozen=sender.frozen,
@@ -201,7 +229,8 @@ class InMemoryWalletStore:
             wallet_id=receiver.wallet_id,
             user_id=receiver.user_id,
             currency=receiver.currency,
-            balance=receiver.balance + amount,
+            wallet_type=receiver.wallet_type,
+            balance=receiver.balance + credit_amount,
             public_key=receiver.public_key,
             frozen=receiver.frozen,
         )
@@ -216,6 +245,7 @@ class InMemoryWalletStore:
             wallet_id=w.wallet_id,
             user_id=w.user_id,
             currency=w.currency,
+            wallet_type=w.wallet_type,
             balance=w.balance + amount,
             public_key=w.public_key,
             frozen=w.frozen,
@@ -235,9 +265,21 @@ class InMemoryWalletStore:
                 username="",
                 display_name="",
                 currency=w.currency,
+                wallet_type=w.wallet_type,
                 balance=w.balance,
                 public_key=w.public_key,
                 frozen=w.frozen,
             )
             for w in self._wallets.values()
         ]
+
+    def find_wallet_by_type_currency(
+        self,
+        *,
+        wallet_type: str,
+        currency: str,
+    ) -> WalletRecord | None:
+        for w in self._wallets.values():
+            if w.wallet_type == wallet_type and w.currency == currency:
+                return w
+        return None

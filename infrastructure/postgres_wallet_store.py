@@ -45,12 +45,13 @@ class PostgresWalletStore:
         user_id: str,
         public_key: str,
         currency: str = "NATIVE",
+        wallet_type: str = "USER",
     ) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO wallets (wallet_id, user_id, currency, public_key) "
-                "VALUES (%s, %s, %s, %s)",
-                (wallet_id, user_id, currency, public_key),
+                "INSERT INTO wallets (wallet_id, user_id, currency, wallet_type, public_key) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (wallet_id, user_id, currency, wallet_type, public_key),
             )
 
     def get_wallet(self, wallet_id: str) -> WalletRecord | None:
@@ -99,6 +100,7 @@ class PostgresWalletStore:
         sender_wallet_id: str,
         receiver_wallet_id: str,
         amount: Decimal,
+        receiver_amount: Decimal | None = None,
     ) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             # Lock both wallet rows in a deterministic order to avoid a
@@ -122,6 +124,7 @@ class PostgresWalletStore:
                 raise WalletFrozenError(receiver_wallet_id)
             if Decimal(sender_row[1]) < amount:
                 raise InsufficientBalanceError(sender_wallet_id)
+            credit_amount = receiver_amount if receiver_amount is not None else amount
             cur.execute(
                 "UPDATE wallets SET balance = balance - %s, updated_at = now() "
                 "WHERE wallet_id = %s",
@@ -130,7 +133,7 @@ class PostgresWalletStore:
             cur.execute(
                 "UPDATE wallets SET balance = balance + %s, updated_at = now() "
                 "WHERE wallet_id = %s",
-                (amount, receiver_wallet_id),
+                (credit_amount, receiver_wallet_id),
             )
 
     def credit(self, *, wallet_id: str, amount: Decimal) -> None:
@@ -161,7 +164,7 @@ class PostgresWalletStore:
             cur.execute(
                 """
                 SELECT w.wallet_id, w.user_id, u.username, u.display_name,
-                       w.currency, w.balance, w.public_key, w.frozen
+                       w.currency, w.wallet_type, w.balance, w.public_key, w.frozen
                 FROM wallets w
                 JOIN users u ON u.user_id = w.user_id
                 ORDER BY u.username, w.created_at
@@ -175,16 +178,31 @@ class PostgresWalletStore:
                 username=r[2],
                 display_name=r[3],
                 currency=r[4],
-                balance=Decimal(r[5]),
-                public_key=r[6],
-                frozen=bool(r[7]),
+                wallet_type=r[5],
+                balance=Decimal(r[6]),
+                public_key=r[7],
+                frozen=bool(r[8]),
             )
             for r in rows
         ]
 
+    def find_wallet_by_type_currency(
+        self,
+        *,
+        wallet_type: str,
+        currency: str,
+    ) -> WalletRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                _WALLET_SELECT + " WHERE wallet_type = %s AND currency = %s",
+                (wallet_type, currency),
+            )
+            row = cur.fetchone()
+        return _row_to_wallet(row)
+
 
 _WALLET_SELECT = (
-    "SELECT wallet_id, user_id, currency, balance, public_key, frozen FROM wallets"
+    "SELECT wallet_id, user_id, currency, wallet_type, balance, public_key, frozen FROM wallets"
 )
 
 
@@ -195,7 +213,8 @@ def _row_to_wallet(row: tuple | None) -> WalletRecord | None:
         wallet_id=row[0],
         user_id=row[1],
         currency=row[2],
-        balance=Decimal(row[3]),
-        public_key=row[4],
-        frozen=bool(row[5]),
+        wallet_type=row[3],
+        balance=Decimal(row[4]),
+        public_key=row[5],
+        frozen=bool(row[6]),
     )

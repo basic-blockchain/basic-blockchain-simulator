@@ -430,3 +430,239 @@ async def test_admin_endpoints_validate_unknown_user(monkeypatch):
         )
         assert r.status_code == 400
         assert (await r.get_json())["code"] == "USER_NOT_FOUND"
+
+
+# ── Audit log filtering (Gap #20) ───────────────────────────────────────
+
+
+def _seed_audit_store():
+    """Build an InMemoryUserStore with a known set of audit entries so the
+    filter tests can assert exact slices without spinning up the HTTP app."""
+    from domain.user_repository import InMemoryUserStore
+
+    store = InMemoryUserStore()
+    store.append_audit(actor_id="alice", action="USER_BANNED", target_id="bob", details={})
+    store.append_audit(actor_id="alice", action="USER_UNBANNED", target_id="bob", details={})
+    store.append_audit(actor_id="alice", action="USER_BANNED", target_id="carol", details={})
+    store.append_audit(actor_id="dave", action="USER_BANNED", target_id="bob", details={})
+    store.append_audit(actor_id="dave", action="ROLE_GRANTED", target_id="carol", details={"role": "OPERATOR"})
+    return store
+
+
+def test_recent_audit_unfiltered_returns_all_newest_first():
+    store = _seed_audit_store()
+    entries = store.recent_audit()
+    assert [e.action for e in entries] == [
+        "ROLE_GRANTED",
+        "USER_BANNED",
+        "USER_BANNED",
+        "USER_UNBANNED",
+        "USER_BANNED",
+    ]
+
+
+def test_recent_audit_filters_by_action():
+    store = _seed_audit_store()
+    entries = store.recent_audit(action="USER_BANNED")
+    assert len(entries) == 3
+    assert all(e.action == "USER_BANNED" for e in entries)
+
+
+def test_recent_audit_filters_by_actor_id():
+    store = _seed_audit_store()
+    entries = store.recent_audit(actor_id="dave")
+    assert len(entries) == 2
+    assert all(e.actor_id == "dave" for e in entries)
+
+
+def test_recent_audit_filters_by_target_id():
+    store = _seed_audit_store()
+    entries = store.recent_audit(target_id="carol")
+    assert len(entries) == 2
+    assert all(e.target_id == "carol" for e in entries)
+
+
+def test_recent_audit_combined_filters_use_and_semantics():
+    store = _seed_audit_store()
+    entries = store.recent_audit(
+        action="USER_BANNED", actor_id="alice", target_id="bob"
+    )
+    assert len(entries) == 1
+    assert entries[0].actor_id == "alice"
+    assert entries[0].action == "USER_BANNED"
+    assert entries[0].target_id == "bob"
+
+
+def test_recent_audit_combined_filters_narrow_to_empty_when_no_match():
+    store = _seed_audit_store()
+    entries = store.recent_audit(action="USER_BANNED", actor_id="dave", target_id="carol")
+    assert entries == []
+
+
+# ── Role-level permission overrides (Gap #16) ───────────────────────────
+
+
+async def test_admin_can_list_role_permissions(monkeypatch):
+    """`GET /admin/roles` returns the effective permission set for every
+    known role. With no overrides the listing matches `ROLE_PERMISSIONS`."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+        r = await client.get(
+            "/api/v1/admin/roles", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        body = await r.get_json()
+        roles = body["roles"]
+        for role_name, baseline in ROLE_PERMISSIONS.items():
+            assert role_name in roles
+            assert sorted(baseline) == roles[role_name]
+
+
+async def test_admin_can_grant_and_revoke_role_permission(monkeypatch):
+    """Granting VIEW_USERS to VIEWER appears in the role listing; revoking
+    it removes the override (effective set returns to the baseline)."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+
+        # Grant
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 200, await r.get_json()
+        body = await r.get_json()
+        assert body["role"] == "VIEWER"
+        assert body["action"] == "ROLE_PERMISSION_GRANTED"
+        assert "VIEW_USERS" in body["permissions"]
+
+        # GET /admin/roles reflects the override
+        r = await client.get(
+            "/api/v1/admin/roles", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        roles = (await r.get_json())["roles"]
+        assert "VIEW_USERS" in roles["VIEWER"]
+
+        # Revoke
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "revoke", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 200
+        body = await r.get_json()
+        assert body["action"] == "ROLE_PERMISSION_REVOKED"
+        assert "VIEW_USERS" not in body["permissions"]
+
+
+async def test_role_permission_endpoint_validates_role_and_permission(monkeypatch):
+    """Both the role path-parameter and the permission body field are
+    validated against the known sets; unknown values yield 400 with code
+    VALIDATION_ERROR."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        token, _ = await _login_and_token(client, username="alice")
+
+        # Unknown role
+        r = await client.post(
+            "/api/v1/admin/roles/WIZARD/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "VIEW_USERS"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "VALIDATION_ERROR"
+
+        # Unknown permission
+        r = await client.post(
+            "/api/v1/admin/roles/VIEWER/permissions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"action": "grant", "permission": "WALK_THE_DOG"},
+        )
+        assert r.status_code == 400
+        assert (await r.get_json())["code"] == "VALIDATION_ERROR"
+# ── Audit log filtering (Gap #20) ───────────────────────────────────────
+
+
+def _seed_audit_store():
+    """Build an InMemoryUserStore with a known set of audit entries so the
+    filter tests can assert exact slices without spinning up the HTTP app."""
+    from domain.user_repository import InMemoryUserStore
+
+    store = InMemoryUserStore()
+    store.append_audit(actor_id="alice", action="USER_BANNED", target_id="bob", details={})
+    store.append_audit(actor_id="alice", action="USER_UNBANNED", target_id="bob", details={})
+    store.append_audit(actor_id="alice", action="USER_BANNED", target_id="carol", details={})
+    store.append_audit(actor_id="dave", action="USER_BANNED", target_id="bob", details={})
+    store.append_audit(actor_id="dave", action="ROLE_GRANTED", target_id="carol", details={"role": "OPERATOR"})
+    return store
+
+
+def test_recent_audit_unfiltered_returns_all_newest_first():
+    store = _seed_audit_store()
+    entries = store.recent_audit()
+    assert [e.action for e in entries] == [
+        "ROLE_GRANTED",
+        "USER_BANNED",
+        "USER_BANNED",
+        "USER_UNBANNED",
+        "USER_BANNED",
+    ]
+
+
+def test_recent_audit_filters_by_action():
+    store = _seed_audit_store()
+    entries = store.recent_audit(action="USER_BANNED")
+    assert len(entries) == 3
+    assert all(e.action == "USER_BANNED" for e in entries)
+
+
+def test_recent_audit_filters_by_actor_id():
+    store = _seed_audit_store()
+    entries = store.recent_audit(actor_id="dave")
+    assert len(entries) == 2
+    assert all(e.actor_id == "dave" for e in entries)
+
+
+def test_recent_audit_filters_by_target_id():
+    store = _seed_audit_store()
+    entries = store.recent_audit(target_id="carol")
+    assert len(entries) == 2
+    assert all(e.target_id == "carol" for e in entries)
+
+
+def test_recent_audit_combined_filters_use_and_semantics():
+    store = _seed_audit_store()
+    entries = store.recent_audit(
+        action="USER_BANNED", actor_id="alice", target_id="bob"
+    )
+    assert len(entries) == 1
+    assert entries[0].actor_id == "alice"
+    assert entries[0].action == "USER_BANNED"
+    assert entries[0].target_id == "bob"
+
+
+def test_recent_audit_combined_filters_narrow_to_empty_when_no_match():
+    store = _seed_audit_store()
+    entries = store.recent_audit(action="USER_BANNED", actor_id="dave", target_id="carol")
+    assert entries == []
