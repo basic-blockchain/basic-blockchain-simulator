@@ -12,7 +12,7 @@ from domain.models import Block, Transaction
 # and the Python-side grouping logic does not have to branch.
 _BLOCK_TX_SELECT = (
     "SELECT b.index, b.timestamp, b.proof, b.previous_hash, b.merkle_root, "
-    "       t.id, t.sender, t.receiver, t.amount, "
+    "       t.id, t.sender, t.receiver, t.amount, t.receiver_amount, "
     "       t.sender_wallet_id, t.receiver_wallet_id, t.nonce, t.signature "
     "FROM blocks b "
     "LEFT JOIN transactions t ON t.block_index = b.index"
@@ -50,10 +50,11 @@ def _rows_to_blocks(rows: list[tuple]) -> list[Block]:
                     sender=row[6],
                     receiver=row[7],
                     amount=Decimal(row[8]),
-                    sender_wallet_id=row[9] or "",
-                    receiver_wallet_id=row[10] or "",
-                    nonce=int(row[11] or 0),
-                    signature=row[12] or "",
+                    receiver_amount=Decimal(row[9]) if row[9] is not None else None,
+                    sender_wallet_id=row[10] or "",
+                    receiver_wallet_id=row[11] or "",
+                    nonce=int(row[12] or 0),
+                    signature=row[13] or "",
                 ),
             )
         )
@@ -97,8 +98,8 @@ class PostgresBlockRepository:
                 cur.executemany(
                     ""
                     "INSERT INTO transactions "
-                    "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                    "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
                     "",
                     [
                         (
@@ -106,6 +107,7 @@ class PostgresBlockRepository:
                             tx.sender,
                             tx.receiver,
                             tx.amount,
+                            tx.receiver_amount,
                             tx.sender_wallet_id,
                             tx.receiver_wallet_id,
                             tx.nonce,
@@ -149,8 +151,8 @@ class PostgresBlockRepository:
                     cur.executemany(
                         ""
                         "INSERT INTO transactions "
-                        "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                        "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
                         "",
                         [
                             (
@@ -158,6 +160,7 @@ class PostgresBlockRepository:
                                 tx.sender,
                                 tx.receiver,
                                 tx.amount,
+                                tx.receiver_amount,
                                 tx.sender_wallet_id,
                                 tx.receiver_wallet_id,
                                 tx.nonce,
@@ -179,8 +182,8 @@ class PostgresBlockRepository:
             cur.executemany(
                 ""
                 "INSERT INTO transactions "
-                "(block_index, sender, receiver, amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                "(block_index, sender, receiver, amount, receiver_amount, sender_wallet_id, receiver_wallet_id, nonce, signature) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 "",
                 [
                     (
@@ -188,6 +191,7 @@ class PostgresBlockRepository:
                         tx.sender,
                         tx.receiver,
                         tx.amount,
+                        tx.receiver_amount,
                         tx.sender_wallet_id,
                         tx.receiver_wallet_id,
                         tx.nonce,
@@ -200,7 +204,7 @@ class PostgresBlockRepository:
     def get_confirmed_transactions(self) -> list[dict[str, object]]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT t.block_index, b.timestamp, t.sender, t.receiver, t.amount "
+                "SELECT t.block_index, b.timestamp, t.sender, t.receiver, t.amount, t.receiver_amount "
                 "FROM transactions t "
                 "JOIN blocks b ON b.index = t.block_index "
                 "ORDER BY t.block_index ASC, t.id ASC"
@@ -213,6 +217,7 @@ class PostgresBlockRepository:
                 "sender": row[2],
                 "receiver": row[3],
                 "amount": float(row[4]),
+                "receiver_amount": float(row[5]) if row[5] is not None else None,
             }
             for row in rows
         ]

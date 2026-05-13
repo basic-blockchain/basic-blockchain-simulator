@@ -18,8 +18,7 @@ from quart import Blueprint, jsonify, request
 
 from api.auth_middleware import require_auth
 from api.errors import bad_request
-from domain.audit import ACTION_PASSWORD_CHANGED
-from domain.audit import ACTION_USER_SELF_UPDATED
+from domain.audit import ACTION_PASSWORD_CHANGED, ACTION_USER_SELF_UPDATED
 from domain.auth import (
     DEFAULT_ROLE,
     Role,
@@ -94,11 +93,17 @@ def build_auth_blueprint(
         # this is the first registered user — the env var alone is not
         # enough, otherwise an attacker who learns the magic username
         # would get ADMIN on every subsequent register.
-        if (
-            bootstrap_admin_username
-            and username == bootstrap_admin_username
-            and users.count_users() == 1
-        ):
+        is_bootstrap_admin = False
+        if bootstrap_admin_username and username == bootstrap_admin_username:
+            user_count = users.count_users()
+            if user_count == 1:
+                is_bootstrap_admin = True
+            elif user_count == 2:
+                system_user = users.get_user_by_username("system")
+                if system_user and system_user.user_id == "SYSTEM":
+                    is_bootstrap_admin = True
+
+        if is_bootstrap_admin:
             users.assign_role(user_id=user_id, role=Role.ADMIN.value)
         else:
             users.assign_role(user_id=user_id, role=DEFAULT_ROLE.value)
