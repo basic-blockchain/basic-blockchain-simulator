@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Iterable
+from urllib.parse import urlparse
 from urllib import request
 
 from domain.currency_repository import CurrencyRepositoryProtocol, ExchangeRateRecord
@@ -27,7 +28,10 @@ class ExchangeRateSyncError(Exception):
 
 
 def _fetch_json(url: str) -> dict:
-    with request.urlopen(url, timeout=10) as resp:
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ExchangeRateSyncError("Only https scheme is allowed for exchange feeds")
+    with request.urlopen(url, timeout=10) as resp:  # nosec B310
         payload = resp.read().decode("utf-8")
     return json.loads(payload)
 
