@@ -66,22 +66,32 @@ class PostgresCurrencyStore:
         to_currency: str | None = None,
         limit: int = 50,
     ) -> list[ExchangeRateRecord]:
-        clauses: list[str] = []
         params: list[object] = []
-        if from_currency:
-            clauses.append("from_currency = %s")
-            params.append(from_currency)
-        if to_currency:
-            clauses.append("to_currency = %s")
-            params.append(to_currency)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        query = (
-            "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
-            "FROM exchange_rates"
-            + where
-            + " ORDER BY updated_at DESC LIMIT %s"
-        )
-        params.append(limit)
+        if from_currency and to_currency:
+            query = (
+                "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
+                "FROM exchange_rates WHERE from_currency = %s AND to_currency = %s "
+                "ORDER BY updated_at DESC LIMIT %s"
+            )
+            params.extend([from_currency, to_currency, limit])
+        elif from_currency:
+            query = (
+                "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
+                "FROM exchange_rates WHERE from_currency = %s ORDER BY updated_at DESC LIMIT %s"
+            )
+            params.extend([from_currency, limit])
+        elif to_currency:
+            query = (
+                "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
+                "FROM exchange_rates WHERE to_currency = %s ORDER BY updated_at DESC LIMIT %s"
+            )
+            params.extend([to_currency, limit])
+        else:
+            query = (
+                "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
+                "FROM exchange_rates ORDER BY updated_at DESC LIMIT %s"
+            )
+            params.append(limit)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(query, params)
             rows = cur.fetchall()

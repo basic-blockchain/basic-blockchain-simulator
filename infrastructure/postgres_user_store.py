@@ -13,6 +13,7 @@ import json
 
 import psycopg2
 from psycopg2 import errorcodes
+from psycopg2 import sql
 from psycopg2.extras import Json
 
 from domain.audit import AuditEntry
@@ -136,12 +137,14 @@ class PostgresUserStore:
             params.append(email)
         if not sets:
             return
-        sets.append("updated_at = now()")
         params.append(user_id)
         try:
             with self._connect() as conn, conn.cursor() as cur:
+                assignments = [sql.SQL(part) for part in sets]
                 cur.execute(
-                    f"UPDATE users SET {', '.join(sets)} WHERE user_id = %s",
+                    sql.SQL("UPDATE users SET {}, updated_at = now() WHERE user_id = %s").format(
+                        sql.SQL(", ").join(assignments)
+                    ),
                     params,
                 )
                 if cur.rowcount == 0:
@@ -319,23 +322,31 @@ class PostgresUserStore:
         actor_id: str | None = None,
         target_id: str | None = None,
     ) -> list[AuditEntry]:
-        conditions: list[str] = []
+        conditions: list[sql.SQL] = []
         params: list[object] = []
         if action:
-            conditions.append("action = %s")
+            conditions.append(sql.SQL("action = %s"))
             params.append(action)
         if actor_id:
-            conditions.append("actor_id = %s")
+            conditions.append(sql.SQL("actor_id = %s"))
             params.append(actor_id)
         if target_id:
-            conditions.append("target_id = %s")
+            conditions.append(sql.SQL("target_id = %s"))
             params.append(target_id)
-        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        where = (
+            sql.SQL(" WHERE ") + sql.SQL(" AND ").join(conditions)
+            if conditions
+            else sql.SQL("")
+        )
         params.append(limit)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT id, actor_id, action, target_id, details, created_at "
-                f"FROM audit_log{where} ORDER BY id DESC LIMIT %s",
+                sql.SQL(
+                    "SELECT id, actor_id, action, target_id, details, created_at "
+                    "FROM audit_log"
+                )
+                + where
+                + sql.SQL(" ORDER BY id DESC LIMIT %s"),
                 params,
             )
             rows = cur.fetchall()
