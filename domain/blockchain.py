@@ -3,17 +3,48 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+from statistics import mean
 
-from .models import Block
+from .models import Block, Transaction
 from .repository import BlockRepositoryProtocol
 
 
 DIFFICULTY_PREFIX = "00000"
 
+# Merkle root for an empty transaction set. Documented constant so callers
+# (and reviewers) can verify the boundary case without re-deriving it.
+EMPTY_MERKLE_ROOT = hashlib.sha256(b"").hexdigest()
+
+
+def _compute_merkle_root(txs: list[Transaction]) -> str:
+    """Return the Merkle root over the supplied transactions.
+
+    Empty input yields ``EMPTY_MERKLE_ROOT``. Each leaf is the sha256 of the
+    transaction's canonical JSON. Internal nodes are sha256 of the
+    concatenation of their two child hex digests. Odd-sized levels duplicate
+    the last hash before pairing (Bitcoin convention) so the tree is always
+    balanced.
+    """
+    if not txs:
+        return EMPTY_MERKLE_ROOT
+    level: list[str] = [
+        hashlib.sha256(json.dumps(tx.to_dict(), sort_keys=True).encode()).hexdigest()
+        for tx in txs
+    ]
+    while len(level) > 1:
+        if len(level) % 2 == 1:
+            level.append(level[-1])
+        level = [
+            hashlib.sha256((level[i] + level[i + 1]).encode()).hexdigest()
+            for i in range(0, len(level), 2)
+        ]
+    return level[0]
+
 
 class InMemoryBlockRepository:
     def __init__(self) -> None:
         self._blocks: list[Block] = []
+        self._confirmed: list[dict[str, object]] = []
 
     def get_all(self) -> list[Block]:
         return self._blocks
@@ -27,15 +58,42 @@ class InMemoryBlockRepository:
     def count(self) -> int:
         return len(self._blocks)
 
+    def replace_all(self, blocks: list[Block]) -> None:
+        self._blocks.clear()
+        self._blocks.extend(blocks)
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        block = next((b for b in self._blocks if b.index == block_index), None)
+        block_timestamp = block.timestamp if block is not None else ""
+        for tx in txs:
+            self._confirmed.append(
+                {
+                    "block_index": block_index,
+                    "block_timestamp": block_timestamp,
+                    "sender": tx.sender,
+                    "receiver": tx.receiver,
+                    "amount": float(tx.amount),
+                }
+            )
+
+    def get_confirmed_transactions(self) -> list[dict[str, object]]:
+        return list(self._confirmed)
+
 
 class BlockchainService:
     def __init__(
         self,
         difficulty_prefix: str = DIFFICULTY_PREFIX,
         repository: BlockRepositoryProtocol | None = None,
+        wallet_repo: object | None = None,
     ) -> None:
         self._difficulty_prefix = difficulty_prefix
         self._repo: BlockRepositoryProtocol = repository or InMemoryBlockRepository()
+        # Optional `wallet_repo` enables Phase I.3 per-transaction
+        # signature verification inside `_validate_blocks`. Pre-Phase-I
+        # call sites (and unit tests that never mint a wallet) keep
+        # working with `wallet_repo=None`.
+        self._wallet_repo = wallet_repo
         if self._repo.count() == 0:
             self.create_block(proof=1, previous_hash="0")
 
@@ -43,12 +101,20 @@ class BlockchainService:
     def chain(self) -> list[Block]:
         return self._repo.get_all()
 
-    def create_block(self, proof: int, previous_hash: str) -> Block:
+    def create_block(
+        self,
+        proof: int,
+        previous_hash: str,
+        transactions: list[Transaction] | None = None,
+    ) -> Block:
+        txs = list(transactions) if transactions is not None else []
         block = Block(
             index=self._repo.count() + 1,
             timestamp=str(datetime.datetime.now()),
             proof=proof,
             previous_hash=previous_hash,
+            merkle_root=_compute_merkle_root(txs),
+            transactions=txs,
         )
         self._repo.append(block)
         return block
@@ -67,32 +133,123 @@ class BlockchainService:
             new_proof += 1
 
     def hash_block(self, block: Block) -> str:
-        encoded_block = json.dumps(block.to_dict(), sort_keys=True).encode()
-        return hashlib.sha256(encoded_block).hexdigest()
+        # Hash payload covers the block header *and* the Merkle root, so any
+        # change to a transaction (which would change the Merkle root) breaks
+        # the chain — but the raw transactions are not redundantly hashed.
+        payload = {
+            "index": block.index,
+            "timestamp": block.timestamp,
+            "proof": block.proof,
+            "previous_hash": block.previous_hash,
+            "merkle_root": block.merkle_root,
+        }
+        encoded = json.dumps(payload, sort_keys=True).encode()
+        return hashlib.sha256(encoded).hexdigest()
 
-    def is_chain_valid(self) -> bool:
-        chain = self._repo.get_all()
-        previous_block = chain[0]
-        block_index = 1
+    def _validate_blocks(self, blocks: list[Block]) -> bool:
+        if not blocks:
+            return False
+        # Phase I.3 — verify each transfer's signature against its sender
+        # wallet's recorded public key. Coinbase / mint transactions
+        # carry the sentinel `signature == "MINT"` and skip the ECDSA
+        # check (the system mints its own coin and there is no private
+        # key to sign with).
+        from domain.crypto import canonical_transfer_message, verify
+        from domain.wallet import COINBASE_SIGNATURE
 
-        while block_index < len(chain):
-            block = chain[block_index]
+        # The validator works against an optional wallet repository
+        # injected at construction time; without it (in-memory tests
+        # that do not exercise wallets) signature verification is
+        # skipped because there are no public keys to verify against.
+        wallet_repo = getattr(self, "_wallet_repo", None)
+
+        # Every block's stored Merkle root must match its actual transactions.
+        # Without this check, mutating a row in the `transactions` table would
+        # not be detectable from the chain hash alone.
+        for block in blocks:
+            if _compute_merkle_root(block.transactions) != block.merkle_root:
+                return False
+            if wallet_repo is not None:
+                for tx in block.transactions:
+                    if tx.signature == COINBASE_SIGNATURE:
+                        continue
+                    if not tx.sender_wallet_id or not tx.signature:
+                        # Non-coinbase tx without wallet ID / signature
+                        # is a Phase-I.3-era invalid record.
+                        return False
+                    sender = wallet_repo.get_wallet(tx.sender_wallet_id)
+                    if sender is None:
+                        return False
+                    message = canonical_transfer_message(
+                        sender_wallet_id=tx.sender_wallet_id,
+                        receiver_wallet_id=tx.receiver_wallet_id,
+                        amount=tx.amount,
+                        nonce=tx.nonce,
+                    )
+                    if not verify(sender.public_key, tx.signature, message):
+                        return False
+        previous_block = blocks[0]
+        for block in blocks[1:]:
             if block.previous_hash != self.hash_block(previous_block):
                 return False
-
-            previous_proof = previous_block.proof
-            proof = block.proof
             hash_operation = hashlib.sha256(
-                str(proof**2 - previous_proof**2).encode()
+                str(block.proof**2 - previous_block.proof**2).encode()
             ).hexdigest()
-
             if not hash_operation.startswith(self._difficulty_prefix):
                 return False
-
             previous_block = block
-            block_index += 1
-
         return True
 
-    def chain_as_dicts(self) -> list[dict[str, int | str]]:
+    def is_chain_valid(self) -> bool:
+        return self._validate_blocks(self._repo.get_all())
+
+    def is_valid_chain(self, blocks: list[Block]) -> bool:
+        return self._validate_blocks(blocks)
+
+    def replace_chain(self, blocks: list[Block]) -> None:
+        self._repo.replace_all(blocks)
+
+    def chain_length(self) -> int:
+        return self._repo.count()
+
+    def avg_mine_time_seconds(self) -> float | None:
+        blocks = self._repo.get_all()
+        if len(blocks) < 2:
+            return None
+        deltas = []
+        for i in range(1, len(blocks)):
+            try:
+                t0 = datetime.datetime.fromisoformat(str(blocks[i - 1].timestamp))
+                t1 = datetime.datetime.fromisoformat(str(blocks[i].timestamp))
+                deltas.append((t1 - t0).total_seconds())
+            except ValueError:
+                continue
+        return round(mean(deltas), 3) if deltas else None
+
+    def save_confirmed_transactions(self, block_index: int, txs: list[Transaction]) -> None:
+        # Kept for backward compatibility: in the Phase H+ flow, transactions
+        # are persisted by the same DB transaction that writes the block (see
+        # `repo.append`), so production code no longer calls this. External
+        # callers (e.g. legacy test fixtures) can still invoke it.
+        self._repo.save_confirmed_transactions(block_index, txs)
+
+    def confirmed_transactions(self) -> list[dict[str, object]]:
+        # Single source of truth: the chain itself. Each block carries its
+        # transactions (hydrated at read time from the `transactions` table),
+        # so the flat history is just a flatten over `chain.blocks[*].transactions`.
+        confirmed: list[dict[str, object]] = []
+        for block in self._repo.get_all():
+            for tx in block.transactions:
+                confirmed.append(
+                    {
+                        "block_index": block.index,
+                        "block_timestamp": block.timestamp,
+                        "sender": tx.sender,
+                        "receiver": tx.receiver,
+                        "amount": float(tx.amount),
+                    }
+                )
+        return confirmed
+
+    def chain_as_dicts(self) -> list[dict[str, object]]:
         return [block.to_dict() for block in self._repo.get_all()]

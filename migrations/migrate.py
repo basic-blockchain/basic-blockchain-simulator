@@ -7,8 +7,8 @@ Usage:
     python migrations/migrate.py
 
 Environment:
-    DATABASE_URL  (optional) — full DSN.
-                  Default: postgresql://postgres:postgres@localhost:5432/blockchain_simulator
+    DATABASE_URL  (required) — full postgresql:// DSN.
+                  Loaded automatically from .env if present.
 """
 
 from __future__ import annotations
@@ -18,17 +18,20 @@ import re
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2 import sql
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_DATABASE_URL = (
-    "postgresql://postgres:postgres@localhost:5432/blockchain_simulator"
-)
-DATABASE_URL: str = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+DATABASE_URL: str | None = os.environ.get("DATABASE_URL") or None
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL is not set. Add it to .env or export it before running.", file=sys.stderr)
+    sys.exit(1)
 
 # Derive connection components from the DSN so we can connect to the
 # maintenance DB ("postgres") first for CREATE DATABASE.

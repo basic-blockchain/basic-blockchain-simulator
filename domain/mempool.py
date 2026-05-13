@@ -1,24 +1,23 @@
 from __future__ import annotations
 
+from .mempool_repository import InMemoryMempoolRepository, MempoolRepositoryProtocol
 from .models import Transaction
 from .validation import validate_transaction
 
 
 class MempoolService:
-    def __init__(self) -> None:
-        self._pending: list[Transaction] = []
+    def __init__(self, repository: MempoolRepositoryProtocol | None = None) -> None:
+        self._repo: MempoolRepositoryProtocol = repository or InMemoryMempoolRepository()
 
     def add(self, tx: Transaction) -> None:
         validate_transaction(tx)
-        self._pending.append(tx)
+        self._repo.add(tx)
 
     def flush(self) -> list[Transaction]:
-        drained = list(self._pending)
-        self._pending.clear()
-        return drained
+        return self._repo.flush()
 
     def pending(self) -> list[Transaction]:
-        return list(self._pending)
+        return self._repo.pending()
 
     def count(self) -> int:
-        return len(self._pending)
+        return self._repo.count()
