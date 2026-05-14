@@ -312,3 +312,55 @@ graph LR
 | URL scheme enforcement | http/https only (propagation, consensus) | Same; add allowlist of peer IPs |
 | Logging | Structured JSON | Ship to ELK / Loki; redact sensitive fields |
 | Secrets | `JWT_SECRET` and `DATABASE_URL` via env var / `.env` | Secrets manager (Vault, AWS Secrets Manager) |
+
+---
+
+## 10. Frontend companion
+
+The companion SPA is `basic-blockchain-frontend` (Vue 3 + Pinia + PrimeVue).
+
+### Phase 5 UI architecture
+
+```
+src/
+  assets/
+    main.css          — global utility classes (modal, flow, table, badge system)
+    design-system.css — Cadena design tokens
+  components/
+    atoms/            — Stepper, StatusBadge, HashChip, AmountDisplay
+    molecules/        — BlockCard, TransactionRow, NodeBadge, MetricTile
+    organisms/        — ChainList, MempoolTable, NodePanel, MineButton…
+    flows/            — Multi-step modal components (MineBlockFlow,
+                        TransactionDetailFlow, SendConfirmFlow, ReceiveFlow,
+                        WithdrawFlow, ConvertFlow, ExchangeOrderFlow,
+                        P2PBuyFlow, TreasuryApprovalFlow, KYCReviewFlow,
+                        DisputeResolutionFlow)
+    drawers/          — UserDrawer (5-tab slide-in panel)
+    modals/           — ConfirmUserModal
+  views/              — Route-level components
+    Admin*            — Admin management views (Users, Wallets, Currencies,
+                        ExchangeRates, Compliance, Treasury)
+    Chain/Mempool/Nodes — Blockchain explorer views with bigstat rows
+    P2PView/ExchangeView — User-facing market views
+    WalletView        — Portfolio + quick actions
+```
+
+### API surface consumed by Phase 5 frontend
+
+| Frontend feature        | Endpoint                                       | Status         |
+| ----------------------- | ---------------------------------------------- | -------------- |
+| Mine block              | `POST /api/v1/mine_block`                      | implemented    |
+| View chain              | `GET /api/v1/chain`                            | implemented    |
+| Pending mempool         | `GET /api/v1/mempool`                          | implemented    |
+| Submit transaction      | `POST /api/v1/transactions`                    | implemented    |
+| Confirmed transactions  | `GET /api/v1/transactions`                     | implemented    |
+| Admin users             | `GET/PATCH /api/v1/admin/users`                | implemented    |
+| Admin wallets           | `GET /api/v1/admin/wallets`                    | implemented    |
+| Currencies              | `GET/POST /api/v1/admin/currencies`            | implemented    |
+| Exchange rates          | `GET/POST /api/v1/admin/rates`                 | implemented    |
+| Nodes / consensus       | `GET/POST /api/v1/nodes`                       | implemented    |
+| Treasury distribute     | `POST /api/v1/treasury/distribute`             | pending        |
+| Treasury approve        | `POST /api/v1/treasury/distribute/:id/approve` | pending        |
+| Treasury wallets list   | `GET /api/v1/treasury/wallets`                 | pending        |
+| Audit log               | `GET /api/v1/audit`                            | pending        |
+| P2P endpoints           | `GET/POST /api/v1/p2p/offers`                  | pending        |

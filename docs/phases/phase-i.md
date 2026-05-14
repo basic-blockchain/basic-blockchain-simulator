@@ -118,3 +118,7 @@ Multi-currency / fungible tokens.
 ## Traceability
 
 Every commit subject ends with the work-item ID in brackets (e.g. `feat(auth): add JWT helpers [I.1.3]`). Where a logical change naturally spans multiple items in the same file, the suffix lists all (e.g. `[I.1.3, I.1.4]`). Each PR description checklists every ID it carries.
+
+## Status update — Frontend Phase 5 (2026-05)
+
+The companion frontend completed Phase 5a–5f, delivering a full Cadena-design UI with interactive flows, admin management, chain explorer, P2P marketplace, and exchange views. Backend endpoints listed as pending in `docs/architecture.md` (`/api/v1/treasury/*`, `/api/v1/audit`, `/api/v1/p2p/*`) are prerequisites for Phase 5g (mobile) and full production readiness.
