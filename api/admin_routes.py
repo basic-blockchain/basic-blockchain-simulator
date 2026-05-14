@@ -910,4 +910,55 @@ def build_admin_blueprint(
             200,
         )
 
+    # ── GET /admin/stats ─────────────────────────────────────────────
+
+    @bp.route("/stats", methods=["GET"])
+    @require_permission(Permission.VIEW_USERS)
+    async def get_stats():
+        """Aggregate platform statistics for the admin dashboard KPIs.
+
+        Returns user counts, wallet counts, and total balance per currency
+        for USER wallets only (excludes TREASURY / FEE so the figure
+        represents real user exposure, not platform reserves).
+        """
+        all_users = [u for u in users.list_users() if u.user_id != SYSTEM_USER_ID]
+        total_users = len(all_users)
+        active_users = sum(1 for u in all_users if not u.banned and u.deleted_at is None)
+        banned_users = sum(1 for u in all_users if u.banned)
+        deleted_users = sum(1 for u in all_users if u.deleted_at is not None)
+
+        all_wallets = wallets.list_all_wallets()
+        total_wallets = len(all_wallets)
+        user_wallets = [w for w in all_wallets if w.wallet_type == WalletType.USER.value]
+        frozen_wallets = sum(1 for w in all_wallets if w.frozen)
+        frozen_user_wallets = sum(1 for w in user_wallets if w.frozen)
+
+        balance_by_currency: dict[str, str] = {}
+        for w in user_wallets:
+            key = w.currency
+            balance_by_currency[key] = str(
+                Decimal(balance_by_currency.get(key, "0")) + w.balance
+            )
+
+        return (
+            jsonify(
+                {
+                    "users": {
+                        "total": total_users,
+                        "active": active_users,
+                        "banned": banned_users,
+                        "deleted": deleted_users,
+                    },
+                    "wallets": {
+                        "total": total_wallets,
+                        "user_wallets": len(user_wallets),
+                        "frozen": frozen_wallets,
+                        "frozen_user_wallets": frozen_user_wallets,
+                    },
+                    "balances": balance_by_currency,
+                }
+            ),
+            200,
+        )
+
     return bp
