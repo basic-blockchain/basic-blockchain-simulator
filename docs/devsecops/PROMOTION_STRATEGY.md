@@ -1,3 +1,42 @@
+# Promotion Strategy (Upward Flow) — Simulator
+
+Documento de la estrategia de promoción upward para el repositorio `basic-blockchain-simulator`.
+
+Resumen
+- Flujo: `develop` → `qa` → `staging` → `production` → `main`.
+- Objetivo: permitir a un único desarrollador autopromover cambios cuando las verificaciones automáticas pasan.
+
+Garantías de seguridad
+- Mantener `required_status_checks` (lint, typecheck, tests) en ramas protegidas.
+- `required_conversation_resolution: true` para evitar merges accidentales.
+- `allow_force_pushes: false`.
+
+Implementación
+- Script de promoción: `scripts/devsecops_promotion_chain.sh` genera PRs en dirección upward.
+- Protecciones: sincronizables vía `scripts/bootstrap_branch_protections.sh` y archivos JSON en la raíz del repo.
+- Release idempotente: `.github/workflows/release.yml` contiene un check para omitir creación si el release ya existe.
+
+Flujo de trabajo
+1. Feature desde `develop`.
+2. PR a `develop` y esperar CI.
+3. Merge cuando CI pase.
+4. Ejecutar `bash scripts/devsecops_promotion_chain.sh basic-blockchain basic-blockchain-simulator`.
+
+Comandos
+```
+# Dry run
+DRY_RUN=true bash scripts/devsecops_promotion_chain.sh basic-blockchain basic-blockchain-simulator
+
+# Apply protections preview
+bash scripts/bootstrap_branch_protections.sh basic-blockchain basic-blockchain-simulator --dry-run
+
+# Apply protections live
+GH_BIN="/c/Program Files/GitHub CLI/gh.exe" \
+  bash scripts/bootstrap_branch_protections.sh basic-blockchain basic-blockchain-simulator
+```
+
+Notas
+- Esta estrategia preserva gates automáticos y reduce fricción en equipos pequeños.
 # DevSecOps Promotion Strategy — Upward Flow
 
 ## Overview

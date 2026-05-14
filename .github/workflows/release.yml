@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   release:
@@ -13,7 +13,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -24,7 +24,7 @@ jobs:
             echo "Release $REF_NAME already exists. Skipping creation."
             exit 0
           fi
-          
+
           # Prefer docs/releases/<tag>.md if present so the GitHub Release body
           # is the curated notes the team writes per version. Fall back to the
           # auto-generated PR list only when no notes file exists, so older /
