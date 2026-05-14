@@ -5,16 +5,20 @@
 The Blockchain Simulator is a single-node, educational blockchain implementation
 built in Python. It exposes a versioned REST API, supports optional PostgreSQL
 persistence, propagates transactions and consensus triggers to registered peer
-nodes, and pushes real-time block-mined events via WebSocket.
+nodes, and pushes real-time block-mined events via WebSocket. Phase I adds
+multi-user JWT auth, RBAC with audit logging, per-user wallets (BIP-39 + signed
+transfers), and enriched admin controls (soft-delete/restore users, wallet
+freeze/unfreeze, profile edits).
 
 **Technology stack**
 
 | Concern | Technology |
 |---------|-----------|
-| Language | Python 3.10+ |
+| Language | Python 3.11+ |
 | Web framework | Quart 0.19+ (ASGI, async) |
 | ASGI runner (prod) | Hypercorn |
 | Persistence (optional) | PostgreSQL 14+ via psycopg2-binary |
+| Auth | JWT (HS256) + bcrypt |
 | Concurrency | asyncio (request handling) + ThreadPoolExecutor (peer HTTP calls) |
 | Test runner | pytest 8+ with pytest-asyncio, pytest-cov |
 | Environment config | python-dotenv |
@@ -33,7 +37,8 @@ graph TB
     subgraph Application Tier
         direction TB
         API[API Layer\nQuart Blueprint /api/v1]
-        DOMAIN[Domain Layer\nBlockchainService · MempoolService\nConsensusService · PropagationService]
+        AUTH[Auth + RBAC\nJWT middleware · permissions]
+        DOMAIN[Domain Layer\nBlockchainService · MempoolService\nWalletService · ConsensusService\nPropagationService]
         INFRA[Infrastructure Layer\nPostgres repositories]
         HUB[WebSocketHub\nasyncio queues]
     end
@@ -50,7 +55,8 @@ graph TB
 
     REST -- HTTP/JSON --> API
     WSC -- WebSocket --> HUB
-    API --> DOMAIN
+    API --> AUTH
+    AUTH --> DOMAIN
     API --> HUB
     DOMAIN --> INFRA
     INFRA -- psycopg2 --> PG
@@ -67,8 +73,13 @@ graph TB
 graph TD
     subgraph api["API Layer  (api/)"]
         routes["Routes & handlers\nbasic-blockchain.py"]
+        authmw["JWT middleware\napi/auth_middleware.py"]
+        authroutes["Auth routes\napi/auth_routes.py"]
+        adminroutes["Admin routes\napi/admin_routes.py"]
+        walletroutes["Wallet routes\napi/wallet_routes.py"]
         schema["Request validation\napi/schemas.py"]
         errors["Error envelopes\napi/errors.py"]
+        perms["Permission gate\napi/permissions.py"]
         ratelimit["Rate limiter\napi/rate_limit.py"]
         logging["JSON logger\napi/logging_config.py"]
         hub["WebSocketHub\napi/websocket_hub.py"]
@@ -76,26 +87,39 @@ graph TD
     end
 
     subgraph domain["Domain Layer  (domain/)"]
+        auth["JWT + bcrypt\ndomain/auth.py"]
+        audit["Audit entries\ndomain/audit.py"]
+        permsdom["Permission catalog\ndomain/permissions.py"]
+        crypto["BIP-39 + signing\ndomain/crypto.py"]
         bs["BlockchainService\ndomain/blockchain.py"]
         ms["MempoolService\ndomain/mempool.py"]
         cs["ConsensusService\ndomain/consensus.py"]
         ps["PropagationService\ndomain/propagation.py"]
         nr["NodeRegistry\ndomain/node_registry.py"]
+        walletsvc["Wallet/Transfer services\ndomain/wallet.py"]
         val["Validation rules\ndomain/validation.py"]
         models["Block · Transaction\ndomain/models.py"]
         protos["Repository protocols\ndomain/repository.py\ndomain/mempool_repository.py"]
+        userrepo["User repo protocol\ndomain/user_repository.py"]
+        walletrepo["Wallet repo protocol\ndomain/wallet_repository.py"]
     end
 
     subgraph infra["Infrastructure Layer  (infrastructure/)"]
         pgb["PostgresBlockRepository"]
         pgm["PostgresMempoolRepository"]
         pgn["PostgresNodeRegistry"]
+        pgu["PostgresUserStore"]
+        pgw["PostgresWalletStore"]
     end
 
     subgraph config["Configuration  (config.py)"]
-        env["DATABASE_URL\nDIFFICULTY_PREFIX\nTESTING"]
+        env["DATABASE_URL\nDIFFICULTY_PREFIX\nJWT_SECRET\nJWT_TTL_SECONDS\nBCRYPT_ROUNDS\nTESTING"]
     end
 
+    routes --> authmw
+    routes --> authroutes
+    routes --> adminroutes
+    routes --> walletroutes
     routes --> schema
     routes --> bs
     routes --> ms
@@ -103,6 +127,7 @@ graph TD
     routes --> ps
     routes --> hub
     routes --> health
+    routes --> perms
     routes --> ratelimit
     bs --> protos
     ms --> protos
@@ -159,13 +184,25 @@ graph LR
 basic-blockchain.py
 ├── config.py
 ├── api/
+│   ├── admin_routes.py    ← Quart, domain/*
+│   ├── auth_middleware.py ← Quart, domain/auth.py, domain/permissions.py
+│   ├── auth_routes.py     ← Quart, domain/auth.py
 │   ├── errors.py          ← Quart
 │   ├── health.py          ← psycopg2
 │   ├── logging_config.py  ← Quart (g)
+│   ├── permissions.py     ← Quart, domain/permissions.py
 │   ├── rate_limit.py      ← Quart (jsonify)
 │   ├── schemas.py         ← domain/models.py
+│   ├── wallet_routes.py   ← Quart, domain/wallet.py
 │   └── websocket_hub.py   ← asyncio, Quart (websocket)
 ├── domain/
+│   ├── auth.py            ← bcrypt, jwt
+│   ├── audit.py           ← stdlib only
+│   ├── permissions.py     ← domain/auth.py
+│   ├── crypto.py          ← mnemonic, coincurve
+│   ├── wallet.py          ← domain/wallet_repository.py, domain/crypto.py
+│   ├── user_repository.py ← stdlib only
+│   ├── wallet_repository.py ← stdlib only
 │   ├── models.py          ← stdlib only
 │   ├── validation.py      ← domain/models.py
 │   ├── repository.py      ← domain/models.py
@@ -178,7 +215,9 @@ basic-blockchain.py
 └── infrastructure/
     ├── postgres_repository.py         ← psycopg2, domain/models.py
     ├── postgres_mempool_repository.py ← psycopg2, domain/models.py
-    └── postgres_node_registry.py      ← psycopg2, domain/node_registry.py
+    ├── postgres_node_registry.py      ← psycopg2, domain/node_registry.py
+    ├── postgres_user_store.py         ← psycopg2, domain/user_repository.py
+    └── postgres_wallet_store.py       ← psycopg2, domain/wallet_repository.py
 ```
 
 ---
@@ -227,6 +266,11 @@ deterministic.
 | `DATABASE_URL` | `str \| None` | `None` | PostgreSQL DSN. If absent, in-memory mode is used. |
 | `DIFFICULTY_PREFIX` | `str` | `"00000"` | Leading zeros required in a valid block hash. Increase for harder mining. |
 | `TESTING` | `bool` | `False` | Set to `1` / `true` / `yes` to enable Quart test mode. |
+| `JWT_SECRET` | `str` | *(required)* | Secret used to sign JWTs. Required when `TESTING=false`. |
+| `JWT_ALGORITHM` | `str` | `"HS256"` | JWT signing algorithm. |
+| `JWT_TTL_SECONDS` | `int` | `1800` | JWT expiry in seconds. |
+| `BCRYPT_ROUNDS` | `int` | `12` | bcrypt cost factor for password hashing. |
+| `BOOTSTRAP_ADMIN_USERNAME` | `str \| None` | `None` | Username to auto-promote to ADMIN for the first user. |
 
 ---
 
@@ -261,10 +305,10 @@ graph LR
 
 | Area | Current implementation | Production recommendation |
 |------|----------------------|--------------------------|
-| Authentication | None | JWT or API-key middleware |
+| Authentication | JWT (HS256) + RBAC + audit log | Add token rotation and short-lived refresh tokens |
 | TLS | None (dev server) | Hypercorn with TLS cert or reverse proxy (nginx) |
 | Input validation | Schema + business-rule validation | Add JSON Schema validation library |
 | Rate limiting | Process-local sliding window | Distributed rate limiter (Redis + token bucket) |
 | URL scheme enforcement | http/https only (propagation, consensus) | Same; add allowlist of peer IPs |
 | Logging | Structured JSON | Ship to ELK / Loki; redact sensitive fields |
-| DB credentials | Via `DATABASE_URL` env var / `.env` | Secrets manager (Vault, AWS Secrets Manager) |
+| Secrets | `JWT_SECRET` and `DATABASE_URL` via env var / `.env` | Secrets manager (Vault, AWS Secrets Manager) |
