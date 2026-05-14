@@ -972,4 +972,97 @@ Cada acción registra:
 
 ---
 
+## 9. Frontend Integration — Phase 5 (2026)
+
+The companion SPA `basic-blockchain-frontend` shipped its Phase 5 ("Cadena"
+design) UI in 2026-05. This section maps each interactive flow to the
+simulator endpoints it consumes (or will consume, when marked pending).
+
+### 9.1 User journey: Send tokens
+
+**Actor:** Any authenticated user with a funded wallet.
+
+1. Navigate to **Wallet**.
+2. Click **Enviar**.
+3. `SendConfirmFlow` opens: enter recipient + amount, then slide-to-confirm.
+4. Frontend calls `POST /api/v1/transactions` with the signed payload.
+5. Success screen confirms the transaction is in the mempool.
+
+### 9.2 User journey: Receive tokens
+
+**Actor:** Any authenticated user.
+
+1. Navigate to **Wallet**.
+2. Click **Recibir**.
+3. `ReceiveFlow` displays a QR code for the wallet address; the address is
+   copied to the clipboard on demand.
+4. No backend call is required — the flow operates entirely on the public
+   key already present in the wallet store.
+
+### 9.3 User journey: Withdraw on-chain
+
+**Actor:** Authenticated user with OPERATOR (or higher) permission.
+
+1. Navigate to **Wallet**.
+2. Click **Retirar**.
+3. `WithdrawFlow` walks the user through 5 steps: destination address,
+   re-verify address, 2FA confirmation, broadcast progress, and done.
+4. The broadcast step calls `POST /api/v1/transactions`.
+
+### 9.4 User journey: Mine a block
+
+**Actor:** OPERATOR or ADMIN.
+
+1. Navigate to **Chain** or **Mempool**.
+2. Click **Minar bloque**.
+3. `MineBlockFlow` plays a PoW animation while it calls
+   `POST /api/v1/mine_block`.
+4. On success, the new block is appended to the chain view and the WebSocket
+   stream emits a `block_mined` event consumed by other clients.
+
+### 9.5 User journey: Review transaction
+
+**Actor:** Any authenticated user (own transactions) or ADMIN (any).
+
+1. Click a row in any transaction table (pending or confirmed).
+2. `TransactionDetailFlow` opens showing sender/receiver, amount, fee, and
+   a trace timeline.
+3. Frontend calls `GET /api/v1/transactions/:id` to populate the detail
+   view.
+
+### 9.6 User journey: Treasury distribution
+
+**Actor:** ADMIN.
+
+1. Navigate to **Treasury**.
+2. Click **Distribuir**.
+3. `TreasuryApprovalFlow` enforces dual-approval: first signer signs, the
+   flow waits for the second signer, and only then executes.
+4. The execute step calls `POST /api/v1/treasury/distribute` (⏳ pending
+   backend endpoint) and `POST /api/v1/treasury/distribute/:id/approve`.
+
+### 9.7 User journey: P2P trade
+
+**Actor:** Any authenticated user.
+
+1. Navigate to **P2P**.
+2. Select an offer.
+3. `P2PBuyFlow` walks the user through amount → pay → wait → received.
+4. Backend endpoints under `/api/v1/p2p/*` are ⏳ pending; the flow is
+   currently wired against mock data.
+
+### 9.8 User journey: User detail review
+
+**Actor:** ADMIN.
+
+1. Navigate to **Admin → Users**.
+2. Click any row.
+3. `UserDrawer` slides in with 5 tabs: identity, wallets, movements, KYC,
+   and audit.
+4. Frontend calls `GET /api/v1/admin/users/:id` (the extended payload
+   required for the KYC/audit tabs is partially backed by
+   `GET /api/v1/audit`, which is ⏳ pending).
+
+---
+
 **Fin de guía de casos de uso.**

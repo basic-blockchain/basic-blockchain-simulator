@@ -666,3 +666,65 @@ def test_recent_audit_combined_filters_narrow_to_empty_when_no_match():
     store = _seed_audit_store()
     entries = store.recent_audit(action="USER_BANNED", actor_id="dave", target_id="carol")
     assert entries == []
+
+
+# ── GET /admin/stats ────────────────────────────────────────────────────
+
+
+async def test_admin_stats_returns_correct_aggregates(monkeypatch):
+    """GET /admin/stats returns user counts, wallet counts, and balances."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "alice")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="alice")
+        await _register_activate(client, username="bob")
+        token, _ = await _login_and_token(client, username="alice")
+
+        r = await client.get(
+            "/api/v1/admin/stats", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        body = await r.get_json()
+
+        assert "users" in body
+        assert "wallets" in body
+        assert "balances" in body
+
+        # alice + bob registered, neither banned nor deleted
+        assert body["users"]["total"] >= 2
+        assert body["users"]["active"] >= 2
+        assert body["users"]["banned"] == 0
+        assert body["users"]["deleted"] == 0
+
+        # wallet counts are non-negative integers
+        assert body["wallets"]["total"] >= 0
+        assert body["wallets"]["frozen"] >= 0
+
+
+async def test_admin_stats_requires_authentication():
+    """GET /admin/stats returns 401 when called without a token."""
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        r = await client.get("/api/v1/admin/stats")
+        assert r.status_code == 401
+
+
+async def test_non_admin_cannot_access_stats(monkeypatch):
+    """GET /admin/stats returns 403 for a VIEWER user."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "")
+    import importlib
+    import config
+
+    importlib.reload(config)
+    module = _load_module()
+    async with module.create_app().test_client() as client:
+        await _register_activate(client, username="viewer")
+        token, _ = await _login_and_token(client, username="viewer")
+        r = await client.get(
+            "/api/v1/admin/stats", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403
