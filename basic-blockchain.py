@@ -95,6 +95,7 @@ def _v1_home_payload() -> dict[str, object]:
             "admin_treasury": "/api/v1/admin/treasury",
             "admin_exchange_rates": "/api/v1/admin/exchange-rates",
             "admin_exchange_rates_sync": "/api/v1/admin/exchange-rates/sync",
+            "admin_stats": "/api/v1/admin/stats",
             "wallets_create": "/api/v1/wallets",
             "wallets_me": "/api/v1/wallets/me",
             "currencies": "/api/v1/currencies",
