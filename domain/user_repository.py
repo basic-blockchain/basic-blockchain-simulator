@@ -14,6 +14,7 @@ Phase I.2 extends the surface to cover RBAC overrides
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Protocol
 
 from domain.audit import AuditEntry
@@ -276,7 +277,7 @@ class InMemoryUserStore:
             display_name=rec.display_name,
             email=rec.email,
             banned=rec.banned,
-            deleted_at="deleted",
+            deleted_at=datetime.now(timezone.utc).isoformat(),
         )
 
     def restore_user(self, user_id: str) -> None:
