@@ -226,6 +226,11 @@ async def test_admin_can_list_users_and_grant_role(monkeypatch):
         for u in listing["users"]:
             assert "deleted_at" in u
             assert u["deleted_at"] is None
+            # Phase 5b — enriched profile fields surface on the list endpoint.
+            assert "country" in u
+            assert "kyc_level" in u and u["kyc_level"] == "L0"
+            assert "last_active" in u
+            assert "created_at" in u and u["created_at"] is not None
 
         # Grant OPERATOR to bob
         r = await client.post(
