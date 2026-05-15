@@ -223,6 +223,9 @@ async def test_admin_can_list_users_and_grant_role(monkeypatch):
         assert listing["count"] == 2
         usernames = {u["username"] for u in listing["users"]}
         assert usernames == {"alice", "bob"}
+        for u in listing["users"]:
+            assert "deleted_at" in u
+            assert u["deleted_at"] is None
 
         # Grant OPERATOR to bob
         r = await client.post(
