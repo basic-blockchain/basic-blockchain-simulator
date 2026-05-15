@@ -89,6 +89,10 @@ def build_admin_blueprint(
                     "email": record.email,
                     "banned": record.banned,
                     "deleted_at": record.deleted_at,
+                    "country": record.country,
+                    "kyc_level": record.kyc_level,
+                    "last_active": record.last_active,
+                    "created_at": record.created_at,
                     "roles": users.get_roles(record.user_id),
                 }
             )
