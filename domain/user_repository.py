@@ -28,6 +28,10 @@ class UserRecord:
     email: str | None = None
     banned: bool = False
     deleted_at: str | None = None
+    country: str | None = None
+    kyc_level: str = "L0"
+    last_active: str | None = None
+    created_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -171,7 +175,11 @@ class InMemoryUserStore:
         if email and email in self._by_email:
             raise EmailTakenError(email)
         self._users[user_id] = UserRecord(
-            user_id=user_id, username=username, display_name=display_name, email=email
+            user_id=user_id,
+            username=username,
+            display_name=display_name,
+            email=email,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
         self._by_username[username] = user_id
         if email:
@@ -263,6 +271,10 @@ class InMemoryUserStore:
             email=rec.email,
             banned=banned,
             deleted_at=rec.deleted_at,
+            country=rec.country,
+            kyc_level=rec.kyc_level,
+            last_active=rec.last_active,
+            created_at=rec.created_at,
         )
 
     # ── Soft-delete + profile edit (Phase I.5) ─────────────────────
@@ -278,6 +290,10 @@ class InMemoryUserStore:
             email=rec.email,
             banned=rec.banned,
             deleted_at=datetime.now(timezone.utc).isoformat(),
+            country=rec.country,
+            kyc_level=rec.kyc_level,
+            last_active=rec.last_active,
+            created_at=rec.created_at,
         )
 
     def restore_user(self, user_id: str) -> None:
@@ -291,6 +307,10 @@ class InMemoryUserStore:
             email=rec.email,
             banned=rec.banned,
             deleted_at=None,
+            country=rec.country,
+            kyc_level=rec.kyc_level,
+            last_active=rec.last_active,
+            created_at=rec.created_at,
         )
 
     def update_user(
@@ -332,6 +352,10 @@ class InMemoryUserStore:
             email=new_email,
             banned=rec.banned,
             deleted_at=rec.deleted_at,
+            country=rec.country,
+            kyc_level=rec.kyc_level,
+            last_active=rec.last_active,
+            created_at=rec.created_at,
         )
 
     # ── Permission overrides ───────────────────────────────────────

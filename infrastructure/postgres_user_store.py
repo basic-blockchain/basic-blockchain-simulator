@@ -364,7 +364,8 @@ class PostgresUserStore:
 
 
 _USER_SELECT = (
-    "SELECT user_id, username, display_name, email, banned, deleted_at FROM users"
+    "SELECT user_id, username, display_name, email, banned, deleted_at, "
+    "country, kyc_level, last_active, created_at FROM users"
 )
 
 
@@ -378,4 +379,8 @@ def _row_to_user(row: tuple | None) -> UserRecord | None:
         email=row[3],
         banned=bool(row[4]) if len(row) > 4 else False,
         deleted_at=str(row[5]) if len(row) > 5 and row[5] is not None else None,
+        country=row[6] if len(row) > 6 and row[6] is not None else None,
+        kyc_level=str(row[7]) if len(row) > 7 and row[7] is not None else "L0",
+        last_active=str(row[8]) if len(row) > 8 and row[8] is not None else None,
+        created_at=str(row[9]) if len(row) > 9 and row[9] is not None else None,
     )
