@@ -227,6 +227,108 @@ Emits audit `KYC_REVIEW_REQUESTED` with `{ "target": "L1" }`.
 
 ---
 
+## KYC admin review (Phase 6g-admin)
+
+Operator-facing routes that work the queue produced by the user flow
+above. Every route is gated by the new `REVIEW_KYC` permission, which
+ships in the ADMIN baseline (`domain/permissions.py`). Mounted under
+`/api/v1/admin/kyc`.
+
+Failures share the same envelope as the rest of the admin surface plus:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `KYC_NO_PENDING_REVIEW` | The target user has no `kyc_pending_review` set |
+| 400 | `KYC_UNKNOWN_DOCUMENT_KEY` | The path `<doc_key>` is outside `{dni, selfie, address, funds}` |
+| 400 | `KYC_DOCUMENT_NOT_UPLOADED` | The requested document was never uploaded by the user |
+| 400 | `KYC_NOT_ALL_DOCUMENTS_VERIFIED` | Promote was attempted but at least one required doc is not `verified` |
+
+### GET /api/v1/admin/kyc/pending  *(permission REVIEW_KYC)*
+
+Lists every user with `kyc_pending_review IS NOT NULL`, ordered by
+`kyc_submitted_at` ascending so the oldest submission surfaces first.
+
+**Response 200**
+```json
+{
+  "users": [
+    {
+      "user_id": "...",
+      "username": "bob",
+      "display_name": "Bob",
+      "kyc_level": "L0",
+      "pending_review": "L1",
+      "submitted_at": "2026-05-16T12:34:56+00:00",
+      "documents": [
+        { "key": "dni",     "status": "pending_review", "uploaded_at": "...", "filename": "dni.png", "content_type": "image/png" },
+        { "key": "selfie",  "status": "pending_review", "uploaded_at": "...", "filename": "selfie.png", "content_type": "image/png" },
+        { "key": "address", "status": "missing" },
+        { "key": "funds",   "status": "missing" }
+      ]
+    }
+  ],
+  "count": 1
+}
+```
+
+The raw base64 `data` payload is **never** returned — only the public
+metadata shipped by the user-flow endpoints.
+
+### POST /api/v1/admin/kyc/users/&lt;user_id&gt;/documents/&lt;doc_key&gt;/approve  *(permission REVIEW_KYC)*
+
+Marks a single document as `verified` and stamps `reviewed_at`. The
+user's `kyc_pending_review` stays intact — the operator must approve
+every required doc and then call `/promote` to flip the level.
+
+**Response 200** — the refreshed public document record:
+```json
+{ "key": "dni", "status": "verified", "uploaded_at": "...", "reviewed_at": "...", "filename": "dni.png", "content_type": "image/png" }
+```
+
+Emits audit `KYC_DOCUMENT_APPROVED` with `{ "key": "dni", "target_user_id": "..." }`.
+
+### POST /api/v1/admin/kyc/users/&lt;user_id&gt;/documents/&lt;doc_key&gt;/reject  *(permission REVIEW_KYC)*
+
+**Request**
+```json
+{ "reason": "blurry photo" }
+```
+
+Marks the document as `rejected`, stamps `reviewed_at` and stores the
+operator-supplied `reject_reason`. Rejecting **any** document aborts
+the whole review cycle: `kyc_pending_review` and `kyc_submitted_at` are
+cleared so the user can re-upload and resubmit without hitting
+`KYC_REVIEW_IN_PROGRESS`.
+
+`reason` must be a non-empty string.
+
+**Response 200** — the refreshed public document record (now including
+`reject_reason`).
+
+Emits audit `KYC_DOCUMENT_REJECTED` with
+`{ "key": "dni", "target_user_id": "...", "reason": "..." }`.
+
+### POST /api/v1/admin/kyc/users/&lt;user_id&gt;/promote  *(permission REVIEW_KYC)*
+
+Promotes the user to their current `kyc_pending_review` target.
+Requires that every document in `REQUIRED_DOCS_FOR[target]` is in
+`status: 'verified'`. On success: `kyc_level` is set to the target and
+`kyc_pending_review` / `kyc_submitted_at` are cleared.
+
+**Response 200**
+```json
+{ "user_id": "...", "from_level": "L0", "to_level": "L1" }
+```
+
+If at least one required document is not yet verified, the call fails
+with `KYC_NOT_ALL_DOCUMENTS_VERIFIED` and the message lists the
+remaining keys.
+
+Emits audit `KYC_LEVEL_PROMOTED` with
+`{ "from_level": "L0", "to_level": "L1", "target_user_id": "..." }`.
+
+---
+
 ## Admin endpoints (Phase I.2–I.5, v0.14.0)
 
 All admin routes require an authenticated user holding the right
