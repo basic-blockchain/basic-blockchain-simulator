@@ -32,6 +32,17 @@ class UserRecord:
     kyc_level: str = "L0"
     last_active: str | None = None
     created_at: str | None = None
+    # Phase 6g — per-user KYC documents and review state. `kyc_documents`
+    # is a mapping keyed by document type ('dni', 'selfie', 'address',
+    # 'funds') to records of shape:
+    #   { status: 'missing'|'uploaded'|'pending_review'|'verified'|'rejected',
+    #     uploaded_at?: str, content_type?: str, filename?: str,
+    #     reviewed_at?: str, reject_reason?: str }
+    # Raw base64 payloads live separately in the persistence layer and are
+    # never returned by the API.
+    kyc_documents: dict[str, dict[str, object]] = field(default_factory=dict)
+    kyc_pending_review: str | None = None
+    kyc_submitted_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -111,6 +122,17 @@ class UserRepositoryProtocol(Protocol):
         email: str | None,
         username: str | None = None,
     ) -> None: ...
+
+    # KYC (Phase 6g)
+    def set_kyc_documents(
+        self, *, user_id: str, documents: dict[str, dict[str, object]]
+    ) -> None: ...
+
+    def set_kyc_pending_review(
+        self, *, user_id: str, target: str | None, submitted_at: str | None
+    ) -> None: ...
+
+    def set_kyc_level(self, *, user_id: str, level: str) -> None: ...
 
     # Permission overrides (Phase I.2)
     def get_role_overrides(self) -> dict[str, set[str]]: ...
@@ -275,6 +297,9 @@ class InMemoryUserStore:
             kyc_level=rec.kyc_level,
             last_active=rec.last_active,
             created_at=rec.created_at,
+            kyc_documents=dict(rec.kyc_documents),
+            kyc_pending_review=rec.kyc_pending_review,
+            kyc_submitted_at=rec.kyc_submitted_at,
         )
 
     # ── Soft-delete + profile edit (Phase I.5) ─────────────────────
@@ -294,6 +319,9 @@ class InMemoryUserStore:
             kyc_level=rec.kyc_level,
             last_active=rec.last_active,
             created_at=rec.created_at,
+            kyc_documents=dict(rec.kyc_documents),
+            kyc_pending_review=rec.kyc_pending_review,
+            kyc_submitted_at=rec.kyc_submitted_at,
         )
 
     def restore_user(self, user_id: str) -> None:
@@ -311,6 +339,9 @@ class InMemoryUserStore:
             kyc_level=rec.kyc_level,
             last_active=rec.last_active,
             created_at=rec.created_at,
+            kyc_documents=dict(rec.kyc_documents),
+            kyc_pending_review=rec.kyc_pending_review,
+            kyc_submitted_at=rec.kyc_submitted_at,
         )
 
     def update_user(
@@ -356,7 +387,35 @@ class InMemoryUserStore:
             kyc_level=rec.kyc_level,
             last_active=rec.last_active,
             created_at=rec.created_at,
+            kyc_documents=dict(rec.kyc_documents),
+            kyc_pending_review=rec.kyc_pending_review,
+            kyc_submitted_at=rec.kyc_submitted_at,
         )
+
+    # ── KYC (Phase 6g) ─────────────────────────────────────────────
+
+    def set_kyc_documents(
+        self, *, user_id: str, documents: dict[str, dict[str, object]]
+    ) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        rec.kyc_documents = dict(documents)
+
+    def set_kyc_pending_review(
+        self, *, user_id: str, target: str | None, submitted_at: str | None
+    ) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        rec.kyc_pending_review = target
+        rec.kyc_submitted_at = submitted_at
+
+    def set_kyc_level(self, *, user_id: str, level: str) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        rec.kyc_level = level
 
     # ── Permission overrides ───────────────────────────────────────
 
