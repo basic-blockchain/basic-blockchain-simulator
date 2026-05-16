@@ -15,6 +15,7 @@ from api.auth_routes import build_auth_blueprint
 from api.errors import bad_request, register_error_handlers
 from api.permissions import set_permission_resolver
 from api.wallet_routes import build_wallet_blueprint
+from api.kyc_admin_routes import build_kyc_admin_blueprint
 from api.kyc_routes import build_kyc_blueprint
 from api.health import check_db_connectivity
 from api.logging_config import logger
@@ -430,6 +431,11 @@ def create_app(
     # admin-side review/approval lives elsewhere.
     kyc_bp = build_kyc_blueprint(users=user_store)
     api_v1.register_blueprint(kyc_bp)
+
+    # Phase 6g-admin: KYC admin review endpoints (/admin/kyc/*). Gated by
+    # Permission.REVIEW_KYC which is on the ADMIN baseline.
+    kyc_admin_bp = build_kyc_admin_blueprint(users=user_store)
+    api_v1.register_blueprint(kyc_admin_bp)
 
     @app.before_serving
     async def _start_exchange_feed():
