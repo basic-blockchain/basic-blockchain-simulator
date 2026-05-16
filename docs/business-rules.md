@@ -121,9 +121,24 @@ comments and test cases.
 | BR-KY-03 | The raw base64 `data` is persisted in `users.kyc_documents` but **never** returned by the API. `_public_document` whitelists the safe fields (`key`, `status`, `uploaded_at`, `reviewed_at`, `reject_reason`, `content_type`, `filename`). | `api/kyc_routes.py` |
 | BR-KY-04 | A review can only target the next level: `target` must equal `current_level + 1`. Skipping levels returns `KYC_LEVEL_SKIP_NOT_ALLOWED`. | `api/kyc_routes.py` (`LEVEL_ORDER`) |
 | BR-KY-05 | Required documents per target: `L1 → {dni, selfie}`, `L2 → +address`, `L3 → +funds`. Missing documents return `KYC_MISSING_DOCUMENTS` with the list of missing keys. | `api/kyc_routes.py` (`REQUIRED_DOCS_FOR`) |
-| BR-KY-06 | While `users.kyc_pending_review IS NOT NULL` no further uploads or review submissions are accepted from the same user — both return `KYC_REVIEW_IN_PROGRESS`. The flag is cleared by the (not-yet-implemented) admin approve / reject flow. | `api/kyc_routes.py` |
+| BR-KY-06 | While `users.kyc_pending_review IS NOT NULL` no further uploads or review submissions are accepted from the same user — both return `KYC_REVIEW_IN_PROGRESS`. The flag is cleared by the admin approve-all + promote flow on success, or by any admin document rejection (see BR-KY-12 / BR-KY-13). | `api/kyc_routes.py` |
 | BR-KY-07 | Successful upload emits audit `KYC_DOCUMENT_UPLOADED` with `{key, content_type, filename}`. Successful review submission emits `KYC_REVIEW_REQUESTED` with `{target}`. | `api/kyc_routes.py`, `domain/audit.py` |
 | BR-KY-08 | All three routes (`/me/kyc/status`, `/documents`, `/review`) gate on `require_auth()`; no extra permission is needed — any authenticated user manages **their own** KYC state and cannot read or mutate anyone else's. | `api/auth_middleware.py`, `api/kyc_routes.py` |
+
+---
+
+## 8c. KYC Admin-Review Rules *(Phase 6g-admin)*
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-KY-09 | All four admin routes (`/admin/kyc/pending`, `.../approve`, `.../reject`, `.../promote`) gate on `Permission.REVIEW_KYC`. The permission ships in the ADMIN baseline; granting it to another role or to a single user follows the standard override path. | `api/kyc_admin_routes.py`, `domain/permissions.py` |
+| BR-KY-10 | Approve, reject and promote require the target user to have `kyc_pending_review IS NOT NULL`; otherwise the call fails with `KYC_NO_PENDING_REVIEW`. | `api/kyc_admin_routes.py` |
+| BR-KY-11 | Approve flips a single document to `status: 'verified'` and stamps `reviewed_at`. It does **not** clear pending review state — the operator must approve every required doc and then call `/promote`. | `api/kyc_admin_routes.py` |
+| BR-KY-12 | Reject requires a non-empty `reason`, flips the document to `status: 'rejected'` with `reject_reason`, and aborts the whole review by clearing `kyc_pending_review` and `kyc_submitted_at` so the user can re-upload without hitting `KYC_REVIEW_IN_PROGRESS`. | `api/kyc_admin_routes.py` |
+| BR-KY-13 | Promote requires that every document in `REQUIRED_DOCS_FOR[target]` is in `status: 'verified'`; otherwise it fails with `KYC_NOT_ALL_DOCUMENTS_VERIFIED` listing the keys still pending. On success it sets `kyc_level` to the target and clears the pending review state. | `api/kyc_admin_routes.py` |
+| BR-KY-14 | Document keys on the admin routes are validated against the same `ALLOWED_DOC_KEYS` set as the user flow; unknown keys return `KYC_UNKNOWN_DOCUMENT_KEY`. A key that was never uploaded returns `KYC_DOCUMENT_NOT_UPLOADED`. | `api/kyc_admin_routes.py` |
+| BR-KY-15 | Audit actions emitted: approve → `KYC_DOCUMENT_APPROVED {key, target_user_id}`; reject → `KYC_DOCUMENT_REJECTED {key, target_user_id, reason}`; promote → `KYC_LEVEL_PROMOTED {from_level, to_level, target_user_id}`. | `domain/audit.py`, `api/kyc_admin_routes.py` |
+| BR-KY-16 | The raw base64 `data` payload is **never** exposed on the admin surface either — `/admin/kyc/pending` reuses `_public_document` to keep the contract identical to the user side. | `api/kyc_admin_routes.py` |
 
 ---
 
