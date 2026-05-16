@@ -268,6 +268,9 @@ def build_auth_blueprint(
                     "display_name": user.display_name,
                     "email": user.email,
                     "roles": users.get_roles(user.user_id),
+                    "banned": user.banned,
+                    "created_at": user.created_at,
+                    "kyc_level": user.kyc_level or "L0",
                 }
             ),
             200,
