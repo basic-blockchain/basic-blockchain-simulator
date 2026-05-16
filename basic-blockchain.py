@@ -15,6 +15,7 @@ from api.auth_routes import build_auth_blueprint
 from api.errors import bad_request, register_error_handlers
 from api.permissions import set_permission_resolver
 from api.wallet_routes import build_wallet_blueprint
+from api.kyc_routes import build_kyc_blueprint
 from api.health import check_db_connectivity
 from api.logging_config import logger
 from api.rate_limit import rate_limit
@@ -423,6 +424,12 @@ def create_app(
         currencies=currency_store,
     )
     api_v1.register_blueprint(wallet_bp)
+
+    # Phase 6g: KYC user-flow endpoints (/me/kyc/status, /documents,
+    # /review). Any authenticated user can manage their own KYC state;
+    # admin-side review/approval lives elsewhere.
+    kyc_bp = build_kyc_blueprint(users=user_store)
+    api_v1.register_blueprint(kyc_bp)
 
     @app.before_serving
     async def _start_exchange_feed():

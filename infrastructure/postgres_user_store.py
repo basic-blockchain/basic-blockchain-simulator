@@ -157,6 +157,41 @@ class PostgresUserStore:
                 raise EmailTakenError(email or "") from exc
             raise
 
+    # ── KYC (Phase 6g) ────────────────────────────────────────────
+
+    def set_kyc_documents(
+        self, *, user_id: str, documents: dict[str, dict[str, object]]
+    ) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET kyc_documents = %s, updated_at = now() "
+                "WHERE user_id = %s",
+                (Json(documents), user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
+    def set_kyc_pending_review(
+        self, *, user_id: str, target: str | None, submitted_at: str | None
+    ) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET kyc_pending_review = %s, kyc_submitted_at = %s, "
+                "updated_at = now() WHERE user_id = %s",
+                (target, submitted_at, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
+    def set_kyc_level(self, *, user_id: str, level: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET kyc_level = %s, updated_at = now() WHERE user_id = %s",
+                (level, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
+
     # ── Credentials ───────────────────────────────────────────────────
 
     def create_credentials(
@@ -365,13 +400,20 @@ class PostgresUserStore:
 
 _USER_SELECT = (
     "SELECT user_id, username, display_name, email, banned, deleted_at, "
-    "country, kyc_level, last_active, created_at FROM users"
+    "country, kyc_level, last_active, created_at, "
+    "kyc_documents, kyc_pending_review, kyc_submitted_at FROM users"
 )
 
 
 def _row_to_user(row: tuple | None) -> UserRecord | None:
     if row is None:
         return None
+    raw_docs = row[10] if len(row) > 10 and row[10] is not None else {}
+    if isinstance(raw_docs, str):
+        try:
+            raw_docs = json.loads(raw_docs)
+        except json.JSONDecodeError:
+            raw_docs = {}
     return UserRecord(
         user_id=row[0],
         username=row[1],
@@ -383,4 +425,7 @@ def _row_to_user(row: tuple | None) -> UserRecord | None:
         kyc_level=str(row[7]) if len(row) > 7 and row[7] is not None else "L0",
         last_active=str(row[8]) if len(row) > 8 and row[8] is not None else None,
         created_at=str(row[9]) if len(row) > 9 and row[9] is not None else None,
+        kyc_documents=dict(raw_docs) if isinstance(raw_docs, dict) else {},
+        kyc_pending_review=str(row[11]) if len(row) > 11 and row[11] is not None else None,
+        kyc_submitted_at=str(row[12]) if len(row) > 12 and row[12] is not None else None,
     )
