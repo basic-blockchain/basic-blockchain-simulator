@@ -126,9 +126,104 @@ Requires `Authorization: Bearer <jwt>`.
   "username": "alice",
   "display_name": "Alice",
   "email": "alice@example.com",
-  "roles": ["VIEWER"]
+  "roles": ["VIEWER"],
+  "banned": false,
+  "created_at": "2026-05-16T14:00:00+00:00",
+  "kyc_level": "L0"
 }
 ```
+
+`banned`, `created_at` and `kyc_level` were added in Phase 6g
+(`feat(auth): surface kyc_level + banned + created_at on /auth/me`).
+`kyc_level` defaults to `"L0"` for users who have not yet completed
+a KYC review.
+
+---
+
+## KYC user flow (Phase 6g)
+
+Self-service endpoints any authenticated user can call to manage
+their own KYC state. Mounted under `/api/v1/me/kyc`. Admin-side
+review (approve / reject / promote level) is **not yet implemented**
+— see ROADMAP §5 Backlog.
+
+All routes require `Authorization: Bearer <jwt>`. Document keys are
+the closed set `{dni, selfie, address, funds}`. Level targets are
+the closed set `{L1, L2, L3}` and must be exactly `current_level + 1`.
+
+| Code | When |
+|------|------|
+| `KYC_UNKNOWN_DOCUMENT_KEY` | `key` outside the allowed set |
+| `KYC_INVALID_DOCUMENT_DATA` | empty / missing base64 `data` |
+| `KYC_INVALID_REVIEW_TARGET` | `target` outside `{L1, L2, L3}` |
+| `KYC_LEVEL_SKIP_NOT_ALLOWED` | `target` is not `current_level + 1` |
+| `KYC_MISSING_DOCUMENTS` | required documents for `target` not all uploaded |
+| `KYC_REVIEW_IN_PROGRESS` | a review is already pending for this user |
+
+### GET /api/v1/me/kyc/status
+
+**Response 200**
+```json
+{
+  "level": "L0",
+  "documents": [
+    { "key": "dni",     "status": "missing" },
+    { "key": "selfie",  "status": "missing" },
+    { "key": "address", "status": "missing" },
+    { "key": "funds",   "status": "missing" }
+  ]
+}
+```
+
+When a review has been submitted the response also includes
+`pending_review: "L1"` (the requested target) and `submitted_at`
+(ISO 8601 UTC). Documents that were part of the submission carry
+`status: "pending_review"`.
+
+### POST /api/v1/me/kyc/documents
+
+**Request**
+```json
+{
+  "key": "dni",
+  "filename": "dni.png",
+  "content_type": "image/png",
+  "data": "<base64 payload>"
+}
+```
+
+**Response 201** — sanitised `KycDocumentRecord` (the raw `data`
+payload is **never** returned by the API):
+```json
+{
+  "key": "dni",
+  "status": "uploaded",
+  "uploaded_at": "2026-05-16T14:05:00+00:00",
+  "filename": "dni.png",
+  "content_type": "image/png"
+}
+```
+
+Emits audit `KYC_DOCUMENT_UPLOADED` with
+`{ "key": <key>, "content_type": <ct>, "filename": <fn> }`.
+
+### POST /api/v1/me/kyc/review
+
+**Request**
+```json
+{ "target": "L1" }
+```
+
+Required document set per target:
+- `L1` → `dni`, `selfie`
+- `L2` → `dni`, `selfie`, `address`
+- `L3` → `dni`, `selfie`, `address`, `funds`
+
+**Response 200** — the refreshed `KycStatusResponse` with
+`pending_review` set to the target and matching `uploaded` documents
+flipped to `pending_review`.
+
+Emits audit `KYC_REVIEW_REQUESTED` with `{ "target": "L1" }`.
 
 ---
 
