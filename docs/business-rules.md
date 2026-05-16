@@ -112,6 +112,21 @@ comments and test cases.
 
 ---
 
+## 8b. KYC User-Flow Rules *(Phase 6g)*
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-KY-01 | Document `key` must be one of `{dni, selfie, address, funds}`. Anything else returns `KYC_UNKNOWN_DOCUMENT_KEY`. | `api/kyc_routes.py` (`ALLOWED_DOC_KEYS`) |
+| BR-KY-02 | Upload payload requires non-empty `data` (base64), `filename`, and `content_type`. Missing or empty fields return `KYC_INVALID_DOCUMENT_DATA` / `VALIDATION_ERROR`. | `api/kyc_routes.py` |
+| BR-KY-03 | The raw base64 `data` is persisted in `users.kyc_documents` but **never** returned by the API. `_public_document` whitelists the safe fields (`key`, `status`, `uploaded_at`, `reviewed_at`, `reject_reason`, `content_type`, `filename`). | `api/kyc_routes.py` |
+| BR-KY-04 | A review can only target the next level: `target` must equal `current_level + 1`. Skipping levels returns `KYC_LEVEL_SKIP_NOT_ALLOWED`. | `api/kyc_routes.py` (`LEVEL_ORDER`) |
+| BR-KY-05 | Required documents per target: `L1 → {dni, selfie}`, `L2 → +address`, `L3 → +funds`. Missing documents return `KYC_MISSING_DOCUMENTS` with the list of missing keys. | `api/kyc_routes.py` (`REQUIRED_DOCS_FOR`) |
+| BR-KY-06 | While `users.kyc_pending_review IS NOT NULL` no further uploads or review submissions are accepted from the same user — both return `KYC_REVIEW_IN_PROGRESS`. The flag is cleared by the (not-yet-implemented) admin approve / reject flow. | `api/kyc_routes.py` |
+| BR-KY-07 | Successful upload emits audit `KYC_DOCUMENT_UPLOADED` with `{key, content_type, filename}`. Successful review submission emits `KYC_REVIEW_REQUESTED` with `{target}`. | `api/kyc_routes.py`, `domain/audit.py` |
+| BR-KY-08 | All three routes (`/me/kyc/status`, `/documents`, `/review`) gate on `require_auth()`; no extra permission is needed — any authenticated user manages **their own** KYC state and cannot read or mutate anyone else's. | `api/auth_middleware.py`, `api/kyc_routes.py` |
+
+---
+
 ## 9. Peer Node Rules
 
 | ID | Rule | Enforcement layer |
