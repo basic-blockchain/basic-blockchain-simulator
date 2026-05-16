@@ -16,6 +16,15 @@ class UserRecord:
     email:        str | None
     banned:       bool
     deleted_at:   str | None
+    # Phase 5b — enriched profile columns (V018)
+    country:      str | None    # ISO-3166 alpha-2
+    kyc_level:    str           # 'L0' | 'L1' | 'L2' | 'L3' (default 'L0')
+    last_active:  str | None    # ISO 8601 UTC
+    created_at:   str | None    # ISO 8601 UTC
+    # Phase 6g — KYC user flow (V019)
+    kyc_documents:       dict[str, dict[str, object]]  # keyed by doc type
+    kyc_pending_review:  str | None    # target level under review, e.g. 'L1'
+    kyc_submitted_at:    str | None    # ISO 8601 UTC
 
 @dataclass
 class CredentialsRecord:
@@ -406,6 +415,50 @@ CREATE TABLE nodes (
     url TEXT PRIMARY KEY
 );
 ```
+
+### V018 — Enriched user profile (Phase 5b)
+
+```sql
+ALTER TABLE users
+    ADD COLUMN country     CHAR(2),
+    ADD COLUMN kyc_level   VARCHAR(4) DEFAULT 'L0',
+    ADD COLUMN last_active TIMESTAMPTZ,
+    ADD COLUMN created_at  TIMESTAMPTZ DEFAULT now();
+CREATE INDEX idx_users_kyc_level   ON users (kyc_level);
+CREATE INDEX idx_users_country     ON users (country);
+CREATE INDEX idx_users_last_active ON users (last_active);
+```
+
+### V019 — KYC documents + review state (Phase 6g)
+
+```sql
+ALTER TABLE users
+    ADD COLUMN kyc_documents      JSONB       DEFAULT '{}'::jsonb,
+    ADD COLUMN kyc_pending_review VARCHAR(4),
+    ADD COLUMN kyc_submitted_at   TIMESTAMPTZ;
+CREATE INDEX idx_users_kyc_pending_review
+    ON users (kyc_pending_review)
+    WHERE kyc_pending_review IS NOT NULL;
+```
+
+`kyc_documents` stores one entry per document type
+(`dni` / `selfie` / `address` / `funds`) following the shape:
+
+```json
+{
+  "key":          "dni",
+  "status":       "uploaded",
+  "uploaded_at":  "2026-05-16T14:05:00+00:00",
+  "filename":     "dni.png",
+  "content_type": "image/png",
+  "data":         "<base64 payload — never returned by the API>"
+}
+```
+
+The raw base64 payload is intentionally stored on the same JSONB
+blob until an object-storage tier lands. The HTTP layer
+(`api/kyc_routes.py:_public_document`) strips the `data` field
+before serialising any response.
 
 ---
 
