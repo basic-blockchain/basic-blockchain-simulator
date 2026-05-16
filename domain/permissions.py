@@ -55,6 +55,9 @@ class Permission(str, Enum):
     CREATE_TREASURY_WALLET = "CREATE_TREASURY_WALLET"
     MANAGE_EXCHANGE_RATES = "MANAGE_EXCHANGE_RATES"
 
+    # KYC admin review (Phase 6g-admin)
+    REVIEW_KYC = "REVIEW_KYC"
+
 
 # Role baselines — least-privilege by default.
 #
@@ -104,6 +107,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.CREATE_CURRENCY.value,
         Permission.CREATE_TREASURY_WALLET.value,
         Permission.MANAGE_EXCHANGE_RATES.value,
+        # KYC admin review (Phase 6g-admin).
+        Permission.REVIEW_KYC.value,
         # NOTE: MINT and VIEW_TRANSFERS are deliberately absent.
         # Grant them per-admin via `user_permissions` when needed.
     },
