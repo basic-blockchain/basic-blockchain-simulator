@@ -429,6 +429,42 @@ def test_convert_to_usd_passes_through_when_source_is_usd():
     ) == Decimal("42.5")
 
 
+# ── /admin/wallets balance_usd enrichment (Phase 6i) ────────────────────
+
+
+async def test_admin_wallets_carries_balance_usd_when_rate_exists(monkeypatch):
+    """`/admin/wallets` enrichment landed in Phase 6i: every wallet
+    gains a `balance_usd` field (null when no FX rate), plus
+    aggregate `total_balance_usd` and `unpriced_currencies`."""
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get("/api/v1/admin/wallets", headers=_auth(token))
+            assert r.status_code == 200
+            body = await r.get_json()
+            assert "wallets" in body
+            assert "total_balance_usd" in body
+            assert "unpriced_currencies" in body
+            for w in body["wallets"]:
+                # balance_usd is either a string or null — never missing.
+                assert "balance_usd" in w
+                assert w["balance_usd"] is None or isinstance(w["balance_usd"], str)
+            # Fresh boot has only the NATIVE currency seeded with no FX
+            # rate; every wallet should be unpriced and total = 0.
+            assert body["total_balance_usd"] == "0"
+            assert body["unpriced_currencies"] == ["NATIVE"] or all(
+                w["balance_usd"] is None for w in body["wallets"]
+            )
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
 async def test_audit_since_filter_accepts_24h_window(monkeypatch):
     module = await _bootstrap_admin(monkeypatch)
     try:
