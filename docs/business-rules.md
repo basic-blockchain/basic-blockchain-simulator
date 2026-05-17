@@ -64,6 +64,8 @@ comments and test cases.
 | BR-AU-05 | JWTs are HS256 with a `{sub, roles, iat, exp}` payload and a configurable TTL (`JWT_TTL_SECONDS`, default 1800). Tampered tokens fail with HTTP 401 / `AUTH_INVALID_TOKEN`; expired tokens fail with HTTP 401 / `AUTH_EXPIRED_TOKEN`. | `domain/auth.py` (`create_jwt`/`decode_jwt`) · `api/auth_middleware.py` |
 | BR-AU-06 | The simulator refuses to start when `JWT_SECRET` is empty unless `TESTING=true` is set. The test suite uses a deterministic 38-byte sentinel so unit tests are reproducible without environment coupling. | `config.py` · `basic-blockchain.py` (`create_app`) |
 | BR-AU-07 | The middleware never persists the decoded token; it lives only on `g.current_user` for the duration of the request. Public endpoints (`/`, `/health`, `/chain`, `/valid`, `/auth/*`, legacy `/get_chain`/`/valid`) reach the route with `g.current_user = None`. | `api/auth_middleware.py` (`PUBLIC_PATHS`) |
+| BR-AU-08 | `POST /auth/register` accepts an optional `country` field; values are case-folded to uppercase and validated as an ISO 3166-1 alpha-2 (two alphabetic characters). Anything else returns `VALIDATION_ERROR`. The value is persisted on `users.country` and surfaces on `/admin/users`. | `api/auth_routes.py` (`register`) · `domain/user_repository.py` (`create_user`) |
+| BR-AU-09 | `POST /auth/login` stamps `users.last_active = now()` **after** every credential / activation / ban guard so failed attempts never update the column (no enumeration leak via the timestamp). | `api/auth_routes.py` (`login`) · `users.touch_last_active(...)` |
 
 ---
 
