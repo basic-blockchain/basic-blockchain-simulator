@@ -58,3 +58,45 @@ class AuditEntry:
     target_id: str | None
     details: dict[str, object]
     created_at: str
+
+
+# Phase 6e — canonical severity classification for audit actions.
+#
+# `severity_for(action)` is the single source of truth: the HTTP layer
+# attaches the result to every entry and the dashboard's "Eventos
+# críticos hoy" widget filters on it. Clients MUST NOT reclassify
+# (BR-AD-10). Any action absent from `_CRITICAL` / `_WARNING` defaults
+# to `"info"`, which keeps newly added actions safe by default.
+
+_CRITICAL: Final[frozenset[str]] = frozenset({
+    "USER_BANNED",
+    "USER_DELETED",
+    "WALLET_FROZEN",
+    "MINT",
+    "KYC_DOCUMENT_REJECTED",
+})
+
+_WARNING: Final[frozenset[str]] = frozenset({
+    "TEMP_PASSWORD_ISSUED",
+    "PASSWORD_CHANGED",
+    "ROLE_GRANTED",
+    "ROLE_REVOKED",
+    "PERMISSION_GRANTED",
+    "PERMISSION_REVOKED",
+    "ROLE_PERMISSION_GRANTED",
+    "ROLE_PERMISSION_REVOKED",
+    "KYC_LEVEL_PROMOTED",
+})
+
+
+def severity_for(action: str) -> str:
+    """Return the canonical severity (`critical` / `warning` / `info`)
+    for an audit action name. See BR-AD-10."""
+    if action in _CRITICAL:
+        return "critical"
+    if action in _WARNING:
+        return "warning"
+    return "info"
+
+
+SEVERITIES: Final[frozenset[str]] = frozenset({"critical", "warning", "info"})
