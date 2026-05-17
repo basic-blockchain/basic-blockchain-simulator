@@ -28,9 +28,44 @@ from domain.user_repository import (
 class PostgresUserStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
+        # Sticky flag set on first UndefinedColumn from the extended
+        # users SELECT — keeps us from re-attempting the wide query on
+        # every call once we know the schema is pre-V018/V019. Reset by
+        # restarting the process after running migrations.
+        self._users_legacy_only = False
 
     def _connect(self):
         return psycopg2.connect(self._dsn)
+
+    def _select_users(self, where_clause: str, params: tuple) -> list[tuple]:
+        """Execute a users SELECT resilient to pre-V018/V019 schemas.
+
+        Tries the extended column set first (country, kyc_level,
+        last_active, created_at + V019 kyc_documents/pending/submitted);
+        on `UndefinedColumn` it falls back to the legacy projection so
+        environments that have not yet run migrate.py keep working with
+        a degraded but valid UserRecord (KYC fields default to L0 /
+        missing). The fallback is sticky for the life of this store
+        instance so we do not pay the failure round-trip every call.
+        """
+        if self._users_legacy_only:
+            query = _USER_SELECT_LEGACY + where_clause
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(query, params)
+                return cur.fetchall()
+
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(_USER_SELECT + where_clause, params)
+                return cur.fetchall()
+        except psycopg2.errors.UndefinedColumn:
+            # Schema predates V018 (and possibly V019). Latch onto the
+            # legacy projection until the process restarts; the caller
+            # gets a UserRecord whose new fields default sensibly.
+            self._users_legacy_only = True
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(_USER_SELECT_LEGACY + where_clause, params)
+                return cur.fetchall()
 
     # ── Users ─────────────────────────────────────────────────────────
 
@@ -60,16 +95,12 @@ class PostgresUserStore:
             raise
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(_USER_SELECT + " WHERE user_id = %s", (user_id,))
-            row = cur.fetchone()
-        return _row_to_user(row)
+        rows = self._select_users(" WHERE user_id = %s", (user_id,))
+        return _row_to_user(rows[0]) if rows else None
 
     def get_user_by_username(self, username: str) -> UserRecord | None:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(_USER_SELECT + " WHERE username = %s", (username,))
-            row = cur.fetchone()
-        return _row_to_user(row)
+        rows = self._select_users(" WHERE username = %s", (username,))
+        return _row_to_user(rows[0]) if rows else None
 
     def count_users(self) -> int:
         with self._connect() as conn, conn.cursor() as cur:
@@ -78,9 +109,7 @@ class PostgresUserStore:
         return int(row[0]) if row else 0
 
     def list_users(self) -> list[UserRecord]:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(_USER_SELECT + " ORDER BY username")
-            rows = cur.fetchall()
+        rows = self._select_users(" ORDER BY username", ())
         return [_row_to_user(row) for row in rows if _row_to_user(row) is not None]  # type: ignore[misc]
 
     def set_banned(self, *, user_id: str, banned: bool) -> None:
@@ -402,6 +431,14 @@ _USER_SELECT = (
     "SELECT user_id, username, display_name, email, banned, deleted_at, "
     "country, kyc_level, last_active, created_at, "
     "kyc_documents, kyc_pending_review, kyc_submitted_at FROM users"
+)
+
+# Pre-V018 column set. Used by `_select_users` as a fallback when the
+# extended SELECT raises UndefinedColumn on databases that have not yet
+# run the migrations. `_row_to_user` already tolerates short rows.
+_USER_SELECT_LEGACY = (
+    "SELECT user_id, username, display_name, email, banned, deleted_at "
+    "FROM users"
 )
 
 

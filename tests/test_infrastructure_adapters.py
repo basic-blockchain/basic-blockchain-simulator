@@ -197,14 +197,17 @@ def test_postgres_user_store_core_paths(monkeypatch):
     store = PostgresUserStore("dsn")
     cursor = FakeCursor(
         fetchone_results=[
-            _user_row(),
-            _user_row(),
             (2,),
             ("u1", "hash", "ACTIVATION", "2026-05-13", False),
             ("u1", "hash2", None, "2026-05-13", True),
             ("u1", "hash3", None, "2026-05-13", False),
         ],
         fetchall_results=[
+            # get_user_by_id and get_user_by_username now route through
+            # `_select_users` which calls `fetchall()`; single-row reads
+            # therefore arrive as a one-element list.
+            [_user_row()],
+            [_user_row()],
             [_user_row(), _user_row(user_id="u2", username="bob", display_name="Bob")],
             [("ADMIN",), ("VIEWER",)],
             [("MINT",), ("VIEW_USERS",)],
@@ -259,6 +262,43 @@ def test_postgres_user_store_permissions_roles_and_audit(monkeypatch):
     store.append_audit(actor_id="actor", action="ACTION", target_id="u1", details={"k": "v"})
     audit = store.recent_audit(action="ACTION", actor_id="actor", target_id="u1")
     assert isinstance(audit[0], AuditEntry)
+
+
+def test_postgres_user_store_falls_back_to_legacy_select(monkeypatch):
+    """Pre-V018 databases lack the country/kyc_level/last_active/created_at
+    columns; the extended SELECT must drop down to the legacy projection
+    instead of bubbling up a 500. The fallback is sticky so the second
+    call skips the failing extended query entirely.
+    """
+    import psycopg2 as _psycopg2
+
+    class FailingThenSucceedingCursor(FakeCursor):
+        def __init__(self):
+            super().__init__(fetchall_results=[[_user_row()], [_user_row()]])
+            self._calls = 0
+
+        def execute(self, query, params=None):  # noqa: D401
+            self._calls += 1
+            if "country" in query and self._calls == 1:
+                raise _psycopg2.errors.UndefinedColumn(
+                    'column "country" does not exist'
+                )
+            super().execute(query, params)
+
+    cursor = FailingThenSucceedingCursor()
+    _patch_connect(monkeypatch, postgres_user_store_module, cursor)
+
+    store = PostgresUserStore("dsn")
+    # First call: extended SELECT raises, store retries with legacy.
+    rec = store.get_user_by_id("u1")
+    assert rec is not None
+    assert rec.kyc_level == "L0"  # default-when-missing path in _row_to_user
+    assert store._users_legacy_only is True
+    # Second call: extended SELECT is skipped — only the legacy form runs.
+    extended_after = sum(1 for q, _ in cursor.executed if "country" in q)
+    assert extended_after == 0, "extended SELECT should not run after fallback latches"
+    store.get_user_by_username("alice")
+    assert sum(1 for q, _ in cursor.executed if "country" in q) == 0
 
 
 def test_postgres_user_store_missing_row_paths(monkeypatch):
