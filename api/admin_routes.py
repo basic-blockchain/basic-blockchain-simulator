@@ -1287,7 +1287,7 @@ def build_admin_blueprint(
     # ── GET /admin/volume ────────────────────────────────────────────
 
     @bp.route("/volume", methods=["GET"])
-    @require_permission(Permission.VIEW_TRANSFERS)
+    @require_permission(Permission.VIEW_USERS)
     async def get_volume():
         range_token = request.args.get("range")
         if range_token not in _VOLUME_RANGES:
@@ -1369,7 +1369,7 @@ def build_admin_blueprint(
     # ── GET /admin/movements/top ─────────────────────────────────────
 
     @bp.route("/movements/top", methods=["GET"])
-    @require_permission(Permission.VIEW_TRANSFERS)
+    @require_permission(Permission.VIEW_WALLETS)
     async def get_movements_top():
         range_token = request.args.get("range", "24h")
         if range_token not in _MOVEMENTS_RANGES:
