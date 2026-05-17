@@ -108,7 +108,7 @@ class PostgresTreasuryDistributionStore:
             rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
-    def mark_approved_executed(
+    def record_approval_and_execution(
         self,
         op_id: str,
         *,
