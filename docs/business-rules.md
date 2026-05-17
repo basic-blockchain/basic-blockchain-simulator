@@ -114,6 +114,25 @@ comments and test cases.
 
 ---
 
+## 8d. Dashboard Aggregation Rules *(Phase 6e — contracts)*
+
+These rules pin the shape and semantics of the Phase 6e dashboard
+endpoints (`/admin/volume`, `/admin/stats?compare=`, `/admin/audit?severity=`,
+`/admin/movements/top`) before any implementation lands. Codes
+referenced: `RANGE_INVALID`, `COMPARE_INVALID`, `SEVERITY_INVALID`.
+
+| ID | Rule | Enforcement layer |
+|----|------|-------------------|
+| BR-AD-06 | USD-equivalent amounts on the dashboard endpoints use the exchange rate **as of the transaction's `confirmed_at`**, never the current rate. Historical charts must not shift retroactively when rates move. | `/admin/volume`, `/admin/movements/top` (implementation) |
+| BR-AD-07 | Transactions whose pair has no rate at `confirmed_at` are **excluded** from USD-aggregated totals — never silently zeroed. `/admin/volume` surfaces them as `unpriced_count` (per-bucket and per-totals); `/admin/movements/top` drops them from the ranked list. | `/admin/volume`, `/admin/movements/top` |
+| BR-AD-08 | `/admin/volume`: `range ∈ {30d, 90d, 1y}` (otherwise `RANGE_INVALID`). `bucket ∈ {day, week}` and defaults to `day` for `30d`, `week` otherwise. Empty buckets are emitted with `volume_usd: "0"` and `tx_count: 0` so the client can render a continuous axis without back-filling. | `/admin/volume` |
+| BR-AD-09 | `/admin/stats?compare=`: `compare ∈ {7d, 30d}` (otherwise `COMPARE_INVALID`). The response adds a `compare` block with `delta_abs` and `delta_pct` per metric. `delta_pct` is `null` when the previous-period value is `0` (no `Infinity`, no sentinel). Without `?compare=` the response shape is unchanged. | `/admin/stats` |
+| BR-AD-10 | Audit `severity` is derived **server-side** from the action constant and is canonical: clients must not reclassify. Mapping: `critical` → `USER_BANNED`, `USER_DELETED`, `WALLET_FROZEN`, `MINT`, `KYC_DOCUMENT_REJECTED`. `warning` → `TEMP_PASSWORD_ISSUED`, `PASSWORD_CHANGED`, `ROLE_GRANTED`, `ROLE_REVOKED`, `PERMISSION_GRANTED`, `PERMISSION_REVOKED`, `ROLE_PERMISSION_GRANTED`, `ROLE_PERMISSION_REVOKED`, `KYC_LEVEL_PROMOTED`. `info` → everything else. | `domain/audit.py` (new `SEVERITY` map) |
+| BR-AD-11 | `/admin/audit?severity=`: `severity ∈ {critical, warning, info}` (otherwise `SEVERITY_INVALID`). `since ∈ {1h, 24h, 7d, 30d}`; both filters compose with the existing `action`/`actor_id`/`target_id`/`limit` params. | `/admin/audit` |
+| BR-AD-12 | `/admin/movements/top`: `range ∈ {24h, 7d, 30d}` (default `24h`); `limit ∈ [1, 50]` (default `10`). Movements are ordered by `amount_usd` descending. Excluded (unpriced) transfers do not surface in the ranked list nor count toward `total_volume_usd`. | `/admin/movements/top` |
+
+---
+
 ## 8b. KYC User-Flow Rules *(Phase 6g)*
 
 | ID | Rule | Enforcement layer |
