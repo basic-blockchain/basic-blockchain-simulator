@@ -228,6 +228,207 @@ async def test_stats_without_compare_unchanged_shape(monkeypatch):
         importlib.reload(config)
 
 
+# ── /admin/volume (BR-AD-06/07/08) ─────────────────────────────────────
+
+
+async def test_volume_rejects_invalid_range(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get("/api/v1/admin/volume?range=2y", headers=_auth(token))
+            assert r.status_code == 400
+            assert (await r.get_json())["code"] == "RANGE_INVALID"
+            # Missing range also fails.
+            r = await client.get("/api/v1/admin/volume", headers=_auth(token))
+            assert r.status_code == 400
+            assert (await r.get_json())["code"] == "RANGE_INVALID"
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_volume_empty_chain_returns_grid_with_zeros(monkeypatch):
+    """A freshly-booted simulator has the genesis block only (no
+    transactions). /admin/volume must still return a continuous bucket
+    grid covering the requested window — every bucket at zero — so the
+    frontend can render the axis without client-side back-filling."""
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/volume?range=30d", headers=_auth(token),
+            )
+            assert r.status_code == 200
+            body = await r.get_json()
+            assert body["range"] == "30d"
+            assert body["bucket"] == "day"
+            assert body["currency"] == "USD"
+            # 30 day-buckets at zero (no tx) covers the window.
+            assert len(body["series"]) >= 30
+            assert all(row["tx_count"] == 0 for row in body["series"])
+            assert all(row["volume_usd"] == "0" for row in body["series"])
+            assert body["totals"] == {
+                "volume_usd": "0", "tx_count": 0, "unpriced_count": 0,
+            }
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_volume_week_bucket_default_for_90d(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/volume?range=90d", headers=_auth(token),
+            )
+            assert r.status_code == 200
+            body = await r.get_json()
+            assert body["bucket"] == "week"
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+# ── /admin/movements/top (BR-AD-12) ────────────────────────────────────
+
+
+async def test_movements_top_rejects_invalid_range(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/movements/top?range=2y", headers=_auth(token),
+            )
+            assert r.status_code == 400
+            assert (await r.get_json())["code"] == "RANGE_INVALID"
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_movements_top_empty_chain_returns_empty_list(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/movements/top", headers=_auth(token),
+            )
+            assert r.status_code == 200
+            body = await r.get_json()
+            assert body["range"] == "24h"
+            assert body["limit"] == 10
+            assert body["count"] == 0
+            assert body["movements"] == []
+            assert body["total_volume_usd"] == "0"
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_movements_top_clamps_limit(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            # Limit > 50 is clamped to 50.
+            r = await client.get(
+                "/api/v1/admin/movements/top?limit=500", headers=_auth(token),
+            )
+            assert r.status_code == 200
+            assert (await r.get_json())["limit"] == 50
+            # limit=0 is clamped to 1.
+            r = await client.get(
+                "/api/v1/admin/movements/top?limit=0", headers=_auth(token),
+            )
+            assert (await r.get_json())["limit"] == 1
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+# ── Helper-level coverage (no HTTP) ────────────────────────────────────
+
+
+def test_convert_to_usd_uses_rate_at_timestamp():
+    """`_convert_to_usd` resolves the rate via `get_rate_at(at)`, not
+    the latest row — historical charts must not retroactively shift
+    (BR-AD-06)."""
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+    from domain.currency_repository import InMemoryCurrencyStore
+    from api.admin_routes import _convert_to_usd
+
+    store = InMemoryCurrencyStore()
+    store.create_currency(code="USD", name="US Dollar", decimals=2)
+    store.create_currency(code="BTC", name="Bitcoin", decimals=8)
+
+    long_ago = datetime.now(timezone.utc) - timedelta(days=365)
+    # Seed two rates back-to-back. We then take "future" snapshots to
+    # confirm the lookup picks the latest <= at and returns None when
+    # `at` predates every row.
+    store.set_exchange_rate(
+        from_currency="BTC", to_currency="USD",
+        rate=Decimal("10"), fee_rate=Decimal("0"), source="seed",
+    )
+    store.set_exchange_rate(
+        from_currency="BTC", to_currency="USD",
+        rate=Decimal("20"), fee_rate=Decimal("0"), source="seed",
+    )
+
+    # `long_ago` predates every insert — no rate.
+    assert _convert_to_usd(
+        currencies=store, from_currency="BTC", amount=Decimal("1"), at=long_ago,
+    ) is None
+    # A "well after the inserts" lookup hits the latest rate ($20).
+    future = datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert _convert_to_usd(
+        currencies=store, from_currency="BTC", amount=Decimal("1"), at=future,
+    ) == Decimal("20.00")
+
+
+def test_convert_to_usd_passes_through_when_source_is_usd():
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from domain.currency_repository import InMemoryCurrencyStore
+    from api.admin_routes import _convert_to_usd
+
+    store = InMemoryCurrencyStore()
+    now = datetime.now(timezone.utc)
+    assert _convert_to_usd(
+        currencies=store, from_currency="USD", amount=Decimal("42.5"), at=now,
+    ) == Decimal("42.5")
+
+
 async def test_audit_since_filter_accepts_24h_window(monkeypatch):
     module = await _bootstrap_admin(monkeypatch)
     try:
