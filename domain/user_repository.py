@@ -70,7 +70,10 @@ class UserRepositoryProtocol(Protocol):
         username: str,
         display_name: str,
         email: str | None,
+        country: str | None = None,
     ) -> None: ...
+
+    def touch_last_active(self, *, user_id: str) -> None: ...
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None: ...
 
@@ -191,6 +194,7 @@ class InMemoryUserStore:
         username: str,
         display_name: str,
         email: str | None,
+        country: str | None = None,
     ) -> None:
         if username in self._by_username:
             raise UsernameTakenError(username)
@@ -201,11 +205,18 @@ class InMemoryUserStore:
             username=username,
             display_name=display_name,
             email=email,
+            country=country,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         self._by_username[username] = user_id
         if email:
             self._by_email[email] = user_id
+
+    def touch_last_active(self, *, user_id: str) -> None:
+        rec = self._users.get(user_id)
+        if rec is None:
+            raise KeyError(user_id)
+        rec.last_active = datetime.now(timezone.utc).isoformat()
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         return self._users.get(user_id)
