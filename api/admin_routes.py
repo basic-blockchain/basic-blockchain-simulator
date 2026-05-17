@@ -39,6 +39,7 @@ from domain.audit import (
     severity_for,
 )
 from domain.auth import Role, generate_temp_password, hash_password
+from domain.blockchain import BlockchainService
 from domain.currency_repository import CurrencyAlreadyExistsError, CurrencyRepositoryProtocol
 from domain.permissions import Permission, effective_permissions
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
@@ -93,11 +94,88 @@ def _created_after(created_at: str, cutoff: datetime) -> bool:
     return ts >= cutoff
 
 
+_COMPARE_WINDOWS: dict[str, timedelta] = {
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO8601 timestamp into UTC-aware datetime; None on fail."""
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def _delta_block(current: int, previous: int) -> dict[str, object]:
+    """Build a {current, previous, delta_abs, delta_pct} dict for an
+    integer metric. `delta_pct` is `None` when previous == 0 (BR-AD-09)."""
+    delta_abs = current - previous
+    delta_pct: float | None = None
+    if previous != 0:
+        delta_pct = round((delta_abs / previous) * 100, 2)
+    return {
+        "current": current,
+        "previous": previous,
+        "delta_abs": delta_abs,
+        "delta_pct": delta_pct,
+    }
+
+
+def _count_tx_in_windows(
+    blockchain: BlockchainService,
+    *,
+    cutoff: datetime,
+    window: timedelta,
+) -> tuple[int, int]:
+    """Return `(current_count, previous_count)` for transactions whose
+    block timestamp falls in `[cutoff, now]` and `[cutoff-window, cutoff]`
+    respectively. Blocks whose timestamp does not parse are skipped —
+    the simulator's coinbase blocks use `str(datetime.datetime.now())`
+    which `_parse_iso` handles correctly."""
+    now = datetime.now(timezone.utc)
+    previous_start = cutoff - window
+    current = 0
+    previous = 0
+    for block in blockchain.chain:
+        block_ts = _parse_iso(block.timestamp)
+        if block_ts is None:
+            continue
+        tx_count = len(block.transactions)
+        if cutoff <= block_ts <= now:
+            current += tx_count
+        elif previous_start <= block_ts < cutoff:
+            previous += tx_count
+    return current, previous
+
+
+def _delta_block_usd(current: Decimal, previous: Decimal) -> dict[str, object]:
+    """Same shape as `_delta_block` but encoded for USD values: every
+    number is a stringified Decimal so the JSON never loses precision."""
+    delta_abs = current - previous
+    delta_pct: float | None = None
+    if previous != 0:
+        delta_pct = float(round((delta_abs / previous) * 100, 2))
+    return {
+        "current": str(current),
+        "previous": str(previous),
+        "delta_abs": str(delta_abs),
+        "delta_pct": delta_pct,
+    }
+
+
 def build_admin_blueprint(
     *,
     users: UserRepositoryProtocol,
     wallets: WalletRepositoryProtocol,
     currencies: CurrencyRepositoryProtocol,
+    blockchain: BlockchainService,
     bcrypt_rounds: int = 12,
 ) -> Blueprint:
     """Return the `/admin` blueprint bound to a user + wallet repository.
@@ -993,6 +1071,13 @@ def build_admin_blueprint(
         for USER wallets only (excludes TREASURY / FEE so the figure
         represents real user exposure, not platform reserves).
         """
+        compare_token = request.args.get("compare") or None
+        if compare_token and compare_token not in _COMPARE_WINDOWS:
+            return bad_request(
+                f"compare must be one of {sorted(_COMPARE_WINDOWS)}",
+                "COMPARE_INVALID",
+            )
+
         all_users = [u for u in users.list_users() if u.user_id != SYSTEM_USER_ID]
         total_users = len(all_users)
         active_users = sum(1 for u in all_users if not u.banned and u.deleted_at is None)
@@ -1012,25 +1097,62 @@ def build_admin_blueprint(
                 Decimal(balance_by_currency.get(key, "0")) + w.balance
             )
 
-        return (
-            jsonify(
-                {
-                    "users": {
-                        "total": total_users,
-                        "active": active_users,
-                        "banned": banned_users,
-                        "deleted": deleted_users,
-                    },
-                    "wallets": {
-                        "total": total_wallets,
-                        "user_wallets": len(user_wallets),
-                        "frozen": frozen_wallets,
-                        "frozen_user_wallets": frozen_user_wallets,
-                    },
-                    "balances": balance_by_currency,
-                }
-            ),
-            200,
-        )
+        payload: dict[str, object] = {
+            "users": {
+                "total": total_users,
+                "active": active_users,
+                "banned": banned_users,
+                "deleted": deleted_users,
+            },
+            "wallets": {
+                "total": total_wallets,
+                "user_wallets": len(user_wallets),
+                "frozen": frozen_wallets,
+                "frozen_user_wallets": frozen_user_wallets,
+            },
+            "balances": balance_by_currency,
+        }
+
+        if compare_token:
+            window = _COMPARE_WINDOWS[compare_token]
+            cutoff = datetime.now(timezone.utc) - window
+            # Users that existed before `cutoff` (i.e. the previous
+            # period's "total"). The active/banned/deleted flags are
+            # current-only — we approximate "previous active" as
+            # "users that existed and are not currently deleted before
+            # cutoff" because the store does not snapshot the flags.
+            previous_users = [
+                u for u in all_users
+                if (_parse_iso(u.created_at) or datetime.now(timezone.utc)) <= cutoff
+            ]
+            previous_total = len(previous_users)
+            previous_active = sum(
+                1 for u in previous_users
+                if not u.banned and u.deleted_at is None
+            )
+
+            # Transactions in current vs previous windows. The previous
+            # window is the equal-length window immediately before
+            # `cutoff`. Volume is summed in NATIVE units (no FX yet —
+            # the USD-aggregated version lives on /admin/volume which
+            # carries the historical rate lookup; here we report the
+            # native count and let the dashboard combine the two).
+            current_count, previous_count = _count_tx_in_windows(
+                blockchain, cutoff=cutoff, window=window,
+            )
+
+            payload["compare"] = {
+                "range": compare_token,
+                "previous_period_end": cutoff.isoformat(),
+                "users": {
+                    "total":  _delta_block(total_users, previous_total),
+                    "active": _delta_block(active_users, previous_active),
+                },
+                "transactions": {
+                    "count": _delta_block(current_count, previous_count),
+                },
+            }
+
+        return jsonify(payload), 200
 
     return bp
