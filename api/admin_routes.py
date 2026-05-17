@@ -8,7 +8,9 @@ be present (or granted by override).
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Final
 
 from quart import Blueprint, jsonify, request
 
@@ -34,8 +36,11 @@ from domain.audit import (
     ACTION_USER_UPDATED,
     ACTION_WALLET_FROZEN,
     ACTION_WALLET_UNFROZEN,
+    SEVERITIES,
+    severity_for,
 )
 from domain.auth import Role, generate_temp_password, hash_password
+from domain.blockchain import BlockchainService
 from domain.currency_repository import CurrencyAlreadyExistsError, CurrencyRepositoryProtocol
 from domain.permissions import Permission, effective_permissions
 from domain.user_repository import EmailTakenError, UserRepositoryProtocol
@@ -56,11 +61,250 @@ _VALID_ROLES = {r.value for r in Role}
 _VALID_PERMISSIONS = {p.value for p in Permission}
 
 
+# Relative-window helpers (BR-AD-08/BR-AD-11/BR-AD-12). Grammar is the
+# closed set documented in docs/api-reference.md — anything else
+# returns `None` so the caller can surface a VALIDATION_ERROR.
+_SINCE_WINDOWS: dict[str, timedelta] = {
+    "1h": timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+
+def _parse_since(value: str | None) -> datetime | None:
+    """Translate a `since=` token into a UTC cutoff datetime."""
+    if not value:
+        return None
+    delta = _SINCE_WINDOWS.get(value)
+    if delta is None:
+        return None
+    return datetime.now(timezone.utc) - delta
+
+
+def _created_after(created_at: str, cutoff: datetime) -> bool:
+    """Compare an ISO8601 `created_at` string against a UTC cutoff. PG
+    surfaces created_at as either a `datetime` or an ISO string, so
+    both shapes are accepted defensively."""
+    try:
+        ts = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= cutoff
+
+
+_COMPARE_WINDOWS: dict[str, timedelta] = {
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+_VOLUME_RANGES: dict[str, timedelta] = {
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+    "1y":  timedelta(days=365),
+}
+
+_VOLUME_DEFAULT_BUCKET: dict[str, str] = {
+    "30d": "day", "90d": "week", "1y": "week",
+}
+
+_MOVEMENTS_RANGES: dict[str, timedelta] = {
+    "24h": timedelta(hours=24),
+    "7d":  timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+_USD_CURRENCY: Final[str] = "USD"
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO8601 timestamp into UTC-aware datetime; None on fail."""
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def _delta_block(current: int, previous: int) -> dict[str, object]:
+    """Build a {current, previous, delta_abs, delta_pct} dict for an
+    integer metric. `delta_pct` is `None` when previous == 0 (BR-AD-09)."""
+    delta_abs = current - previous
+    delta_pct: float | None = None
+    if previous != 0:
+        delta_pct = round((delta_abs / previous) * 100, 2)
+    return {
+        "current": current,
+        "previous": previous,
+        "delta_abs": delta_abs,
+        "delta_pct": delta_pct,
+    }
+
+
+def _bucket_key_for(ts: datetime, *, bucket: str) -> str:
+    """ISO date label for a bucket: `YYYY-MM-DD` for day, the Monday of
+    the ISO week for week."""
+    if bucket == "week":
+        monday = ts - timedelta(days=ts.weekday())
+        return monday.date().isoformat()
+    return ts.date().isoformat()
+
+
+def _bucket_keys(*, since: datetime, until: datetime, bucket: str) -> list[str]:
+    """Pre-built grid of bucket keys covering `[since, until]`."""
+    step = timedelta(days=7) if bucket == "week" else timedelta(days=1)
+    cursor = since
+    keys: list[str] = []
+    seen: set[str] = set()
+    while cursor <= until:
+        k = _bucket_key_for(cursor, bucket=bucket)
+        if k not in seen:
+            seen.add(k)
+            keys.append(k)
+        cursor += step
+    # Include the final boundary in case the loop stopped one step shy
+    final = _bucket_key_for(until, bucket=bucket)
+    if final not in seen:
+        keys.append(final)
+    return keys
+
+
+def _owner_of(wallets: WalletRepositoryProtocol, wallet_id: str) -> str:
+    """Look up the user_id that owns a wallet; empty string when the
+    wallet is missing (rare — a tx references a deleted wallet)."""
+    if not wallet_id:
+        return ""
+    rec = wallets.get_wallet(wallet_id)
+    return rec.user_id if rec else ""
+
+
+def _convert_to_usd(
+    *,
+    currencies: CurrencyRepositoryProtocol,
+    from_currency: str,
+    amount: Decimal,
+    at: datetime,
+) -> Decimal | None:
+    """Convert an amount to USD using the rate as of `at` (BR-AD-06).
+    Returns `None` when no rate exists at-or-before that point."""
+    if from_currency == _USD_CURRENCY:
+        return amount
+    rate = currencies.get_rate_at(
+        from_currency=from_currency,
+        to_currency=_USD_CURRENCY,
+        at=at,
+    )
+    if rate is None:
+        return None
+    return (amount * rate.rate).quantize(Decimal("0.01"))
+
+
+def _iter_confirmed_with_meta(
+    *,
+    blockchain: BlockchainService,
+    wallets: WalletRepositoryProtocol,
+    currencies: CurrencyRepositoryProtocol,
+    since: datetime,
+    until: datetime,
+):
+    """Yield `(ts, currency, amount, usd_or_None, tx, block_index)` for
+    every confirmed transaction whose block timestamp falls in
+    `[since, until]`. Currency is resolved from the sender wallet (or
+    receiver wallet when sender is missing — e.g. mint/coinbase)."""
+    for block in blockchain.chain:
+        ts = _parse_iso(block.timestamp)
+        if ts is None or not (since <= ts <= until):
+            continue
+        for tx in block.transactions:
+            sender_wallet = wallets.get_wallet(tx.sender_wallet_id) if tx.sender_wallet_id else None
+            receiver_wallet = wallets.get_wallet(tx.receiver_wallet_id) if tx.receiver_wallet_id else None
+            currency = (
+                sender_wallet.currency if sender_wallet
+                else (receiver_wallet.currency if receiver_wallet else None)
+            )
+            if currency is None:
+                continue
+            amount = Decimal(str(tx.amount))
+            usd = _convert_to_usd(
+                currencies=currencies,
+                from_currency=currency,
+                amount=amount,
+                at=ts,
+            )
+            yield ts, currency, amount, usd, tx, block.index
+
+
+def _iter_confirmed_in_window(
+    *,
+    blockchain: BlockchainService,
+    wallets: WalletRepositoryProtocol,
+    currencies: CurrencyRepositoryProtocol,
+    since: datetime,
+    until: datetime,
+):
+    """Shorter form of `_iter_confirmed_with_meta` for callers that
+    only need (ts, currency, amount, usd)."""
+    for ts, currency, amount, usd, _tx, _idx in _iter_confirmed_with_meta(
+        blockchain=blockchain, wallets=wallets, currencies=currencies,
+        since=since, until=until,
+    ):
+        yield ts, currency, amount, usd
+
+
+def _count_tx_in_windows(
+    blockchain: BlockchainService,
+    *,
+    cutoff: datetime,
+    window: timedelta,
+) -> tuple[int, int]:
+    """Return `(current_count, previous_count)` for transactions whose
+    block timestamp falls in `[cutoff, now]` and `[cutoff-window, cutoff]`
+    respectively. Blocks whose timestamp does not parse are skipped —
+    the simulator's coinbase blocks use `str(datetime.datetime.now())`
+    which `_parse_iso` handles correctly."""
+    now = datetime.now(timezone.utc)
+    previous_start = cutoff - window
+    current = 0
+    previous = 0
+    for block in blockchain.chain:
+        block_ts = _parse_iso(block.timestamp)
+        if block_ts is None:
+            continue
+        tx_count = len(block.transactions)
+        if cutoff <= block_ts <= now:
+            current += tx_count
+        elif previous_start <= block_ts < cutoff:
+            previous += tx_count
+    return current, previous
+
+
+def _delta_block_usd(current: Decimal, previous: Decimal) -> dict[str, object]:
+    """Same shape as `_delta_block` but encoded for USD values: every
+    number is a stringified Decimal so the JSON never loses precision."""
+    delta_abs = current - previous
+    delta_pct: float | None = None
+    if previous != 0:
+        delta_pct = float(round((delta_abs / previous) * 100, 2))
+    return {
+        "current": str(current),
+        "previous": str(previous),
+        "delta_abs": str(delta_abs),
+        "delta_pct": delta_pct,
+    }
+
+
 def build_admin_blueprint(
     *,
     users: UserRepositoryProtocol,
     wallets: WalletRepositoryProtocol,
     currencies: CurrencyRepositoryProtocol,
+    blockchain: BlockchainService,
     bcrypt_rounds: int = 12,
 ) -> Blueprint:
     """Return the `/admin` blueprint bound to a user + wallet repository.
@@ -302,31 +546,61 @@ def build_admin_blueprint(
         action_filter = request.args.get("action") or None
         actor_filter = request.args.get("actor_id") or None
         target_filter = request.args.get("target_id") or None
+        severity_filter = request.args.get("severity") or None
+        since_filter = request.args.get("since") or None
+        if severity_filter and severity_filter not in SEVERITIES:
+            return bad_request(
+                f"severity must be one of {sorted(SEVERITIES)}",
+                "SEVERITY_INVALID",
+            )
+        since_cutoff = _parse_since(since_filter)
+        if since_filter and since_cutoff is None:
+            return bad_request(
+                "since must be one of 1h, 24h, 7d, 30d",
+                "VALIDATION_ERROR",
+            )
+        # Pull a wider window when filtering server-side so the post-filter
+        # count still hits `limit`. 5x is a heuristic — fine for the
+        # in-memory store and indexed PG query, and capped at 1000 so a
+        # critical-only filter on a chatty audit log does not balloon.
+        fetch_limit = limit if (severity_filter is None and since_cutoff is None) else min(limit * 5, 1000)
         entries = users.recent_audit(
-            limit=limit,
+            limit=fetch_limit,
             action=action_filter,
             actor_id=actor_filter,
             target_id=target_filter,
         )
+        out: list[dict[str, object]] = []
+        for e in entries:
+            sev = severity_for(e.action)
+            if severity_filter and sev != severity_filter:
+                continue
+            if since_cutoff is not None and not _created_after(e.created_at, since_cutoff):
+                continue
+            out.append(
+                {
+                    "id": e.id,
+                    "actor_id": e.actor_id,
+                    "action": e.action,
+                    "target_id": e.target_id,
+                    "details": e.details,
+                    "created_at": e.created_at,
+                    "severity": sev,
+                }
+            )
+            if len(out) >= limit:
+                break
         return (
             jsonify(
                 {
-                    "entries": [
-                        {
-                            "id": e.id,
-                            "actor_id": e.actor_id,
-                            "action": e.action,
-                            "target_id": e.target_id,
-                            "details": e.details,
-                            "created_at": e.created_at,
-                        }
-                        for e in entries
-                    ],
-                    "count": len(entries),
+                    "entries": out,
+                    "count": len(out),
                     "filters": {
                         "action": action_filter,
                         "actor_id": actor_filter,
                         "target_id": target_filter,
+                        "severity": severity_filter,
+                        "since": since_filter,
                     },
                 }
             ),
@@ -926,6 +1200,13 @@ def build_admin_blueprint(
         for USER wallets only (excludes TREASURY / FEE so the figure
         represents real user exposure, not platform reserves).
         """
+        compare_token = request.args.get("compare") or None
+        if compare_token and compare_token not in _COMPARE_WINDOWS:
+            return bad_request(
+                f"compare must be one of {sorted(_COMPARE_WINDOWS)}",
+                "COMPARE_INVALID",
+            )
+
         all_users = [u for u in users.list_users() if u.user_id != SYSTEM_USER_ID]
         total_users = len(all_users)
         active_users = sum(1 for u in all_users if not u.banned and u.deleted_at is None)
@@ -945,22 +1226,209 @@ def build_admin_blueprint(
                 Decimal(balance_by_currency.get(key, "0")) + w.balance
             )
 
+        payload: dict[str, object] = {
+            "users": {
+                "total": total_users,
+                "active": active_users,
+                "banned": banned_users,
+                "deleted": deleted_users,
+            },
+            "wallets": {
+                "total": total_wallets,
+                "user_wallets": len(user_wallets),
+                "frozen": frozen_wallets,
+                "frozen_user_wallets": frozen_user_wallets,
+            },
+            "balances": balance_by_currency,
+        }
+
+        if compare_token:
+            window = _COMPARE_WINDOWS[compare_token]
+            cutoff = datetime.now(timezone.utc) - window
+            # Users that existed before `cutoff` (i.e. the previous
+            # period's "total"). The active/banned/deleted flags are
+            # current-only — we approximate "previous active" as
+            # "users that existed and are not currently deleted before
+            # cutoff" because the store does not snapshot the flags.
+            previous_users = [
+                u for u in all_users
+                if (_parse_iso(u.created_at) or datetime.now(timezone.utc)) <= cutoff
+            ]
+            previous_total = len(previous_users)
+            previous_active = sum(
+                1 for u in previous_users
+                if not u.banned and u.deleted_at is None
+            )
+
+            # Transactions in current vs previous windows. The previous
+            # window is the equal-length window immediately before
+            # `cutoff`. Volume is summed in NATIVE units (no FX yet —
+            # the USD-aggregated version lives on /admin/volume which
+            # carries the historical rate lookup; here we report the
+            # native count and let the dashboard combine the two).
+            current_count, previous_count = _count_tx_in_windows(
+                blockchain, cutoff=cutoff, window=window,
+            )
+
+            payload["compare"] = {
+                "range": compare_token,
+                "previous_period_end": cutoff.isoformat(),
+                "users": {
+                    "total":  _delta_block(total_users, previous_total),
+                    "active": _delta_block(active_users, previous_active),
+                },
+                "transactions": {
+                    "count": _delta_block(current_count, previous_count),
+                },
+            }
+
+        return jsonify(payload), 200
+
+    # ── GET /admin/volume ────────────────────────────────────────────
+
+    @bp.route("/volume", methods=["GET"])
+    @require_permission(Permission.VIEW_USERS)
+    async def get_volume():
+        range_token = request.args.get("range")
+        if range_token not in _VOLUME_RANGES:
+            return bad_request(
+                f"range must be one of {sorted(_VOLUME_RANGES)}",
+                "RANGE_INVALID",
+            )
+        bucket = request.args.get("bucket") or _VOLUME_DEFAULT_BUCKET[range_token]
+        if bucket not in {"day", "week"}:
+            return bad_request("bucket must be 'day' or 'week'", "VALIDATION_ERROR")
+
+        now = datetime.now(timezone.utc)
+        since = now - _VOLUME_RANGES[range_token]
+
+        # Pre-build empty buckets so the response carries a continuous
+        # axis (BR-AD-08) regardless of whether any tx fell on each day.
+        bucket_keys = _bucket_keys(since=since, until=now, bucket=bucket)
+        per_bucket: dict[str, dict[str, object]] = {
+            k: {"ts": k, "volume_usd": Decimal("0"), "tx_count": 0, "unpriced_count": 0}
+            for k in bucket_keys
+        }
+        total_usd = Decimal("0")
+        total_count = 0
+        total_unpriced = 0
+
+        for ts, currency, amount, usd in _iter_confirmed_in_window(
+            blockchain=blockchain,
+            wallets=wallets,
+            currencies=currencies,
+            since=since,
+            until=now,
+        ):
+            key = _bucket_key_for(ts, bucket=bucket)
+            row = per_bucket.get(key)
+            if row is None:
+                # Tx fell just inside the window but rounding put its
+                # key outside the pre-built grid (rare on day boundary
+                # crossings) — append on the fly.
+                row = {"ts": key, "volume_usd": Decimal("0"), "tx_count": 0, "unpriced_count": 0}
+                per_bucket[key] = row
+            row["tx_count"] = int(row["tx_count"]) + 1
+            total_count += 1
+            if usd is None:
+                row["unpriced_count"] = int(row["unpriced_count"]) + 1
+                total_unpriced += 1
+            else:
+                row["volume_usd"] = Decimal(str(row["volume_usd"])) + usd
+                total_usd += usd
+
+        series = []
+        for k in sorted(per_bucket.keys()):
+            row = per_bucket[k]
+            series.append(
+                {
+                    "ts": k,
+                    "volume_usd": str(row["volume_usd"]),
+                    "tx_count": int(row["tx_count"]),
+                    "unpriced_count": int(row["unpriced_count"]),
+                }
+            )
+
         return (
             jsonify(
                 {
-                    "users": {
-                        "total": total_users,
-                        "active": active_users,
-                        "banned": banned_users,
-                        "deleted": deleted_users,
+                    "range": range_token,
+                    "bucket": bucket,
+                    "currency": _USD_CURRENCY,
+                    "series": series,
+                    "totals": {
+                        "volume_usd": str(total_usd),
+                        "tx_count": total_count,
+                        "unpriced_count": total_unpriced,
                     },
-                    "wallets": {
-                        "total": total_wallets,
-                        "user_wallets": len(user_wallets),
-                        "frozen": frozen_wallets,
-                        "frozen_user_wallets": frozen_user_wallets,
+                }
+            ),
+            200,
+        )
+
+    # ── GET /admin/movements/top ─────────────────────────────────────
+
+    @bp.route("/movements/top", methods=["GET"])
+    @require_permission(Permission.VIEW_WALLETS)
+    async def get_movements_top():
+        range_token = request.args.get("range", "24h")
+        if range_token not in _MOVEMENTS_RANGES:
+            return bad_request(
+                f"range must be one of {sorted(_MOVEMENTS_RANGES)}",
+                "RANGE_INVALID",
+            )
+        try:
+            limit = int(request.args.get("limit", "10"))
+        except ValueError:
+            return bad_request("limit must be an integer", "VALIDATION_ERROR")
+        limit = max(1, min(limit, 50))
+
+        now = datetime.now(timezone.utc)
+        since = now - _MOVEMENTS_RANGES[range_token]
+
+        scored: list[tuple[Decimal, dict[str, object]]] = []
+        total_volume = Decimal("0")
+        for ts, currency, amount, usd, tx, block_index in _iter_confirmed_with_meta(
+            blockchain=blockchain,
+            wallets=wallets,
+            currencies=currencies,
+            since=since,
+            until=now,
+        ):
+            # BR-AD-12: drop unpriced rows from a USD-ranked list.
+            if usd is None:
+                continue
+            sender_user = users.get_user_by_id(_owner_of(wallets, tx.sender_wallet_id))
+            receiver_user = users.get_user_by_id(_owner_of(wallets, tx.receiver_wallet_id))
+            scored.append(
+                (
+                    usd,
+                    {
+                        "tx_id": tx.signature or f"{block_index}:{tx.nonce}",
+                        "block_height": block_index,
+                        "currency": currency,
+                        "amount": str(amount),
+                        "amount_usd": str(usd),
+                        "from_user_id": sender_user.user_id if sender_user else None,
+                        "from_username": sender_user.username if sender_user else None,
+                        "to_user_id": receiver_user.user_id if receiver_user else None,
+                        "to_username": receiver_user.username if receiver_user else None,
+                        "confirmed_at": ts.isoformat(),
                     },
-                    "balances": balance_by_currency,
+                )
+            )
+            total_volume += usd
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        movements = [row for _, row in scored[:limit]]
+        return (
+            jsonify(
+                {
+                    "range": range_token,
+                    "movements": movements,
+                    "count": len(movements),
+                    "limit": limit,
+                    "total_volume_usd": str(total_volume),
                 }
             ),
             200,

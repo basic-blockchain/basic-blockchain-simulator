@@ -468,7 +468,9 @@ class InMemoryUserStore:
                 action=action,
                 target_id=target_id,
                 details=dict(details or {}),
-                created_at="now",
+                # ISO8601 UTC so `since=` filters and any future
+                # client-side parsing work the same as on the PG path.
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
         )
 

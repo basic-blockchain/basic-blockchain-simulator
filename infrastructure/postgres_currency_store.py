@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 import psycopg2
@@ -132,4 +133,32 @@ class PostgresCurrencyStore:
             fee_rate=fee_rate,
             source=source,
             updated_at=str(row[1]),
+        )
+
+    def get_rate_at(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        at: datetime,
+    ) -> ExchangeRateRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT rate_id, from_currency, to_currency, rate, fee_rate, source, updated_at "
+                "FROM exchange_rates "
+                "WHERE from_currency = %s AND to_currency = %s AND updated_at <= %s "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (from_currency, to_currency, at),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return ExchangeRateRecord(
+            rate_id=int(row[0]),
+            from_currency=row[1],
+            to_currency=row[2],
+            rate=Decimal(row[3]),
+            fee_rate=Decimal(row[4]),
+            source=row[5],
+            updated_at=str(row[6]),
         )

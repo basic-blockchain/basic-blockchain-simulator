@@ -412,6 +412,7 @@ def create_app(
         users=user_store,
         wallets=wallet_store,
         currencies=currency_store,
+        blockchain=chain_service,
         bcrypt_rounds=BCRYPT_ROUNDS,
     )
     api_v1.register_blueprint(admin_bp)

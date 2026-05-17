@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Protocol
 
@@ -61,6 +62,19 @@ class CurrencyRepositoryProtocol(Protocol):
         fee_rate: Decimal,
         source: str,
     ) -> ExchangeRateRecord: ...
+
+    def get_rate_at(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        at: datetime,
+    ) -> ExchangeRateRecord | None:
+        """Latest rate row whose `updated_at <= at`, or `None` when no
+        rate exists for the pair as of that point in time. Used by the
+        Phase 6e dashboard for the "rate as of confirmed_at" rule
+        (BR-AD-06). `at` must be timezone-aware UTC."""
+        ...
 
 
 class InMemoryCurrencyStore:
@@ -123,7 +137,35 @@ class InMemoryCurrencyStore:
             rate=rate,
             fee_rate=fee_rate,
             source=source,
-            updated_at="now",
+            # ISO8601 UTC so `get_rate_at` can compare against any
+            # confirmed_at timestamp from the chain.
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
         self._rates.append(record)
         return record
+
+    def get_rate_at(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        at: datetime,
+    ) -> ExchangeRateRecord | None:
+        candidates = [
+            r for r in self._rates
+            if r.from_currency == from_currency
+            and r.to_currency == to_currency
+            and _isoparse(r.updated_at) <= at
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: _isoparse(r.updated_at))
+
+
+def _isoparse(value: str) -> datetime:
+    """Parse an ISO8601 timestamp the in-memory store wrote (or a
+    PG-shaped string). Naive values are assumed UTC."""
+    ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
