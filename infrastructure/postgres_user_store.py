@@ -76,13 +76,14 @@ class PostgresUserStore:
         username: str,
         display_name: str,
         email: str | None,
+        country: str | None = None,
     ) -> None:
         try:
             with self._connect() as conn, conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO users (user_id, username, display_name, email) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (user_id, username, display_name, email),
+                    "INSERT INTO users (user_id, username, display_name, email, country) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (user_id, username, display_name, email, country),
                 )
         except psycopg2.errors.UniqueViolation as exc:
             # Translate the UNIQUE constraint name back into a domain error
@@ -118,6 +119,15 @@ class PostgresUserStore:
                 "UPDATE users SET banned = %s, updated_at = now() WHERE user_id = %s",
                 (banned, user_id),
             )
+
+    def touch_last_active(self, *, user_id: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET last_active = now() WHERE user_id = %s",
+                (user_id,),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(user_id)
 
     # ── Soft-delete + profile edit (Phase I.5) ────────────────────
 

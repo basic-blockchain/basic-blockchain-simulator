@@ -220,15 +220,27 @@ def test_postgres_user_store_core_paths(monkeypatch):
     )
     _patch_connect(monkeypatch, postgres_user_store_module, cursor)
 
-    store.create_user(user_id="u1", username="alice", display_name="Alice", email="alice@example.com")
+    store.create_user(
+        user_id="u1",
+        username="alice",
+        display_name="Alice",
+        email="alice@example.com",
+        country="AR",
+    )
     assert store.get_user_by_id("u1").username == "alice"
     assert store.get_user_by_username("alice").display_name == "Alice"
     assert store.count_users() == 2
     assert len(store.list_users()) == 2
     store.set_banned(user_id="u1", banned=True)
+    store.touch_last_active(user_id="u1")
     store.soft_delete_user("u1")
     store.restore_user("u1")
     assert cursor.executed
+    # The INSERT must include the new `country` column.
+    insert_calls = [q for q, _ in cursor.executed if q.startswith("INSERT INTO users")]
+    assert any("country" in q for q in insert_calls), insert_calls
+    # touch_last_active emitted an UPDATE on last_active.
+    assert any("last_active" in q for q, _ in cursor.executed)
 
 
 def test_postgres_user_store_permissions_roles_and_audit(monkeypatch):
@@ -312,6 +324,8 @@ def test_postgres_user_store_missing_row_paths(monkeypatch):
         store.restore_user("u-missing")
     with pytest.raises(KeyError):
         store.set_password(user_id="u-missing", password_hash="hash")
+    with pytest.raises(KeyError):
+        store.touch_last_active(user_id="u-missing")
 
 
 def test_postgres_wallet_store_core_paths(monkeypatch):
