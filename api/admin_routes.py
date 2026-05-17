@@ -8,6 +8,7 @@ be present (or granted by override).
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from quart import Blueprint, jsonify, request
@@ -34,6 +35,8 @@ from domain.audit import (
     ACTION_USER_UPDATED,
     ACTION_WALLET_FROZEN,
     ACTION_WALLET_UNFROZEN,
+    SEVERITIES,
+    severity_for,
 )
 from domain.auth import Role, generate_temp_password, hash_password
 from domain.currency_repository import CurrencyAlreadyExistsError, CurrencyRepositoryProtocol
@@ -54,6 +57,40 @@ SYSTEM_USER_ID = "SYSTEM"
 
 _VALID_ROLES = {r.value for r in Role}
 _VALID_PERMISSIONS = {p.value for p in Permission}
+
+
+# Relative-window helpers (BR-AD-08/BR-AD-11/BR-AD-12). Grammar is the
+# closed set documented in docs/api-reference.md — anything else
+# returns `None` so the caller can surface a VALIDATION_ERROR.
+_SINCE_WINDOWS: dict[str, timedelta] = {
+    "1h": timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+
+def _parse_since(value: str | None) -> datetime | None:
+    """Translate a `since=` token into a UTC cutoff datetime."""
+    if not value:
+        return None
+    delta = _SINCE_WINDOWS.get(value)
+    if delta is None:
+        return None
+    return datetime.now(timezone.utc) - delta
+
+
+def _created_after(created_at: str, cutoff: datetime) -> bool:
+    """Compare an ISO8601 `created_at` string against a UTC cutoff. PG
+    surfaces created_at as either a `datetime` or an ISO string, so
+    both shapes are accepted defensively."""
+    try:
+        ts = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= cutoff
 
 
 def build_admin_blueprint(
@@ -302,31 +339,61 @@ def build_admin_blueprint(
         action_filter = request.args.get("action") or None
         actor_filter = request.args.get("actor_id") or None
         target_filter = request.args.get("target_id") or None
+        severity_filter = request.args.get("severity") or None
+        since_filter = request.args.get("since") or None
+        if severity_filter and severity_filter not in SEVERITIES:
+            return bad_request(
+                f"severity must be one of {sorted(SEVERITIES)}",
+                "SEVERITY_INVALID",
+            )
+        since_cutoff = _parse_since(since_filter)
+        if since_filter and since_cutoff is None:
+            return bad_request(
+                "since must be one of 1h, 24h, 7d, 30d",
+                "VALIDATION_ERROR",
+            )
+        # Pull a wider window when filtering server-side so the post-filter
+        # count still hits `limit`. 5x is a heuristic — fine for the
+        # in-memory store and indexed PG query, and capped at 1000 so a
+        # critical-only filter on a chatty audit log does not balloon.
+        fetch_limit = limit if (severity_filter is None and since_cutoff is None) else min(limit * 5, 1000)
         entries = users.recent_audit(
-            limit=limit,
+            limit=fetch_limit,
             action=action_filter,
             actor_id=actor_filter,
             target_id=target_filter,
         )
+        out: list[dict[str, object]] = []
+        for e in entries:
+            sev = severity_for(e.action)
+            if severity_filter and sev != severity_filter:
+                continue
+            if since_cutoff is not None and not _created_after(e.created_at, since_cutoff):
+                continue
+            out.append(
+                {
+                    "id": e.id,
+                    "actor_id": e.actor_id,
+                    "action": e.action,
+                    "target_id": e.target_id,
+                    "details": e.details,
+                    "created_at": e.created_at,
+                    "severity": sev,
+                }
+            )
+            if len(out) >= limit:
+                break
         return (
             jsonify(
                 {
-                    "entries": [
-                        {
-                            "id": e.id,
-                            "actor_id": e.actor_id,
-                            "action": e.action,
-                            "target_id": e.target_id,
-                            "details": e.details,
-                            "created_at": e.created_at,
-                        }
-                        for e in entries
-                    ],
-                    "count": len(entries),
+                    "entries": out,
+                    "count": len(out),
                     "filters": {
                         "action": action_filter,
                         "actor_id": actor_filter,
                         "target_id": target_filter,
+                        "severity": severity_filter,
+                        "since": since_filter,
                     },
                 }
             ),
