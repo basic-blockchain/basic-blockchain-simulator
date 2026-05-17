@@ -39,3 +39,23 @@ EXCHANGE_FEED_PAIRS: str = os.environ.get("EXCHANGE_FEED_PAIRS", "")
 # Username that auto-promotes to ADMIN on first registration. If unset, no
 # bootstrap promotion happens — operators must seed an ADMIN through the DB.
 BOOTSTRAP_ADMIN_USERNAME: str | None = os.environ.get("BOOTSTRAP_ADMIN_USERNAME") or None
+
+# ── Dashboard quote currency (Phase 6i.1) ───────────────────────
+# The currency the admin dashboard converts every balance / movement
+# into for its USD-equivalent fields (`balance_usd`, `volume_usd`,
+# `amount_usd`). Defaults to USDT because every Binance / Crypto.com
+# pair the exchange-rate sync supports is quoted against USDT —
+# changing this requires manually setting `X/<quote>` rates for
+# every currency in use.
+DASHBOARD_QUOTE_CURRENCY: str = (
+    os.environ.get("DASHBOARD_QUOTE_CURRENCY", "USDT").strip().upper() or "USDT"
+)
+
+# Bootstrap-seed the currencies catalog + a small set of default
+# X/USDT rates the first time the simulator boots against an empty
+# `currencies` / `exchange_rates` table. Disable to require an
+# operator to seed the data via /admin/currencies + /admin/exchange-
+# rates manually.
+DASHBOARD_BOOTSTRAP_SEED: bool = os.environ.get(
+    "DASHBOARD_BOOTSTRAP_SEED", "true"
+).lower() in {"1", "true", "yes"}
