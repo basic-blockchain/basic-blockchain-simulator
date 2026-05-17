@@ -75,17 +75,21 @@ class TreasuryMintOpRepositoryProtocol(Protocol):
         limit: int = 50,
     ) -> list[TreasuryMintOpRecord]: ...
 
-    def mark_approved_executed(
+    def record_approval_and_execution(
         self,
         op_id: str,
         *,
         approver_id: str,
         executed_tx_id: str,
     ) -> TreasuryMintOpRecord | None:
-        """Transition `pending_approval` → `executed` atomically and
-        return the updated record. Returns `None` when the row is no
-        longer in `pending_approval`. Raises
-        `TreasuryMintOpSameSignerError` when `approver_id ==
+        """Record the facts of approval and execution atomically:
+        transitions `pending_approval` → `executed` and persists the
+        approver, both timestamps and the resulting coinbase tx id in
+        one update. The caller is responsible for having built and
+        submitted the coinbase tx BEFORE invoking this method.
+
+        Returns `None` when the row is no longer in `pending_approval`.
+        Raises `TreasuryMintOpSameSignerError` when `approver_id ==
         initiated_by` (BR-TR-01)."""
         ...
 
@@ -141,7 +145,7 @@ class InMemoryTreasuryMintOpStore:
         rows.sort(key=lambda r: r.initiated_at, reverse=True)
         return rows[: max(0, limit)]
 
-    def mark_approved_executed(
+    def record_approval_and_execution(
         self,
         op_id: str,
         *,
