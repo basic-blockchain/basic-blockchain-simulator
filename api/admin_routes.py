@@ -776,24 +776,46 @@ def build_admin_blueprint(
     @require_permission(Permission.VIEW_WALLETS)
     async def list_all_wallets():
         records = wallets.list_all_wallets()
+        # USD-as-of-now using the same `_convert_to_usd` helper Phase 6e
+        # built for confirmed_at lookups. Balances are live so we pass
+        # `datetime.now(...)` — wallets with no FX rate keep
+        # `balance_usd: null` (BR-AD-07: never silently zero).
+        now = datetime.now(timezone.utc)
+        total_usd = Decimal("0")
+        unpriced_currencies: set[str] = set()
+        out = []
+        for w in records:
+            usd = _convert_to_usd(
+                currencies=currencies,
+                from_currency=w.currency,
+                amount=w.balance,
+                at=now,
+            )
+            if usd is None:
+                unpriced_currencies.add(w.currency)
+            else:
+                total_usd += usd
+            out.append(
+                {
+                    "wallet_id": w.wallet_id,
+                    "user_id": w.user_id,
+                    "username": w.username,
+                    "display_name": w.display_name,
+                    "currency": w.currency,
+                    "wallet_type": w.wallet_type,
+                    "balance": str(w.balance),
+                    "balance_usd": str(usd) if usd is not None else None,
+                    "public_key": w.public_key,
+                    "frozen": w.frozen,
+                }
+            )
         return (
             jsonify(
                 {
-                    "wallets": [
-                        {
-                            "wallet_id": w.wallet_id,
-                            "user_id": w.user_id,
-                            "username": w.username,
-                            "display_name": w.display_name,
-                            "currency": w.currency,
-                            "wallet_type": w.wallet_type,
-                            "balance": str(w.balance),
-                            "public_key": w.public_key,
-                            "frozen": w.frozen,
-                        }
-                        for w in records
-                    ],
-                    "count": len(records),
+                    "wallets": out,
+                    "count": len(out),
+                    "total_balance_usd": str(total_usd),
+                    "unpriced_currencies": sorted(unpriced_currencies),
                 }
             ),
             200,
