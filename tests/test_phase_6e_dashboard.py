@@ -151,6 +151,83 @@ async def test_audit_rejects_invalid_severity(monkeypatch):
         importlib.reload(config)
 
 
+# ── /admin/stats ?compare= (BR-AD-09) ──────────────────────────────────
+
+
+async def test_stats_compare_appends_delta_block(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            await _register_activate(client, username="bob")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/stats?compare=7d", headers=_auth(token),
+            )
+            assert r.status_code == 200
+            body = await r.get_json()
+            # Unchanged shape
+            assert body["users"]["total"] >= 2
+            # Compare block present
+            cmp = body["compare"]
+            assert cmp["range"] == "7d"
+            assert "previous_period_end" in cmp
+            users_total = cmp["users"]["total"]
+            assert {"current", "previous", "delta_abs", "delta_pct"} <= users_total.keys()
+            assert users_total["current"] == body["users"]["total"]
+            # previous is 0 (everyone signed up just now) → delta_pct null
+            assert users_total["previous"] == 0
+            assert users_total["delta_pct"] is None
+            assert users_total["delta_abs"] == users_total["current"]
+            # transactions block exists; no chain activity → both 0
+            assert cmp["transactions"]["count"]["current"] == 0
+            assert cmp["transactions"]["count"]["previous"] == 0
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_stats_rejects_invalid_compare(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get(
+                "/api/v1/admin/stats?compare=99d", headers=_auth(token),
+            )
+            assert r.status_code == 400
+            assert (await r.get_json())["code"] == "COMPARE_INVALID"
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
+async def test_stats_without_compare_unchanged_shape(monkeypatch):
+    module = await _bootstrap_admin(monkeypatch)
+    try:
+        async with module.create_app().test_client() as client:
+            await _register_activate(client, username="alice")
+            token = await _login(client, username="alice")
+            r = await client.get("/api/v1/admin/stats", headers=_auth(token))
+            assert r.status_code == 200
+            body = await r.get_json()
+            assert "compare" not in body
+            assert {"users", "wallets", "balances"} <= body.keys()
+    finally:
+        import importlib
+        import config
+
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
+
+
 async def test_audit_since_filter_accepts_24h_window(monkeypatch):
     module = await _bootstrap_admin(monkeypatch)
     try:
