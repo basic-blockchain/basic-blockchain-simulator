@@ -60,6 +60,15 @@ def build_auth_blueprint(
         display_name = (data.get("display_name") or username).strip()
         email_raw = data.get("email")
         email = email_raw.strip() if isinstance(email_raw, str) and email_raw.strip() else None
+        country_raw = data.get("country")
+        country: str | None = None
+        if isinstance(country_raw, str) and country_raw.strip():
+            country = country_raw.strip().upper()
+            if len(country) != 2 or not country.isalpha():
+                return bad_request(
+                    "country must be a 2-letter ISO 3166-1 alpha-2 code",
+                    "VALIDATION_ERROR",
+                )
 
         if not username or len(username) > 64:
             return bad_request("Username is required (1..64 chars)", "VALIDATION_ERROR")
@@ -75,6 +84,7 @@ def build_auth_blueprint(
                 username=username,
                 display_name=display_name,
                 email=email,
+                country=country,
             )
         except UsernameTakenError:
             return bad_request("Username already taken", "USERNAME_TAKEN")
@@ -185,6 +195,11 @@ def build_auth_blueprint(
             return bad_request("Invalid credentials", "AUTH_INVALID_CREDENTIALS")
 
         roles = users.get_roles(user.user_id)
+        # Successful login: stamp users.last_active. Failures above
+        # short-circuit so a wrong password never updates the timestamp,
+        # keeping the column honest for the admin "Última actividad"
+        # column and the Phase 6e dashboard.
+        users.touch_last_active(user_id=user.user_id)
         token = create_jwt(
             user.user_id,
             roles,
