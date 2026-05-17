@@ -18,6 +18,7 @@ from api.auth_middleware import require_auth
 from api.errors import bad_request
 from api.permissions import require_permission
 from api.schemas import parse_currency_code
+from config import DASHBOARD_QUOTE_CURRENCY as _DASHBOARD_QUOTE_CURRENCY
 from domain.audit import (
     ACTION_CURRENCY_CREATED,
     ACTION_EXCHANGE_RATE_SET,
@@ -116,7 +117,12 @@ _MOVEMENTS_RANGES: dict[str, timedelta] = {
     "30d": timedelta(days=30),
 }
 
-_USD_CURRENCY: Final[str] = "USD"
+# Quote currency the dashboard converts every balance / movement
+# into. Resolved at import time from `config.DASHBOARD_QUOTE_CURRENCY`
+# (Phase 6i.1) — the constant name keeps the historical "USD" label
+# because the response field is still `balance_usd` and USDT/USDC peg
+# 1:1 with USD; only the rate-lookup target changes.
+_USD_CURRENCY: Final[str] = _DASHBOARD_QUOTE_CURRENCY
 
 
 def _parse_iso(value: str | None) -> datetime | None:
