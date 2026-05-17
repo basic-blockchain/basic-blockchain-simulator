@@ -486,9 +486,13 @@ pills). They are **specified here in Phase 6e.0** before any code
 lands so the backend (6e.1) and frontend (6e.2) sub-phases can move
 in parallel against a stable contract.
 
-All routes are mounted under `/api/v1/admin` and gated by existing
-permissions where possible to avoid expanding the catalog. New
-codes returned: `RANGE_INVALID`, `COMPARE_INVALID`,
+All routes are mounted under `/api/v1/admin` and gated by permissions
+already in the ADMIN baseline so the dashboard renders for every admin
+without a per-user grant: `/admin/volume` and `/admin/stats?compare=`
+use `VIEW_USERS` (aggregated counts); `/admin/movements/top` uses
+`VIEW_WALLETS` (lists individual transfers with owner metadata, same
+disclosure surface as `/admin/wallets`); `/admin/audit` keeps
+`VIEW_AUDIT_LOG`. New error codes: `RANGE_INVALID`, `COMPARE_INVALID`,
 `SEVERITY_INVALID`.
 
 USD aggregation everywhere uses the exchange rate **as of the
@@ -498,7 +502,7 @@ missing for the pair the transaction is omitted from the
 USD-aggregated number (and surfaced in `unpriced_count`) — never
 silently zeroed.
 
-### GET /api/v1/admin/volume  *(permission VIEW_TRANSFERS)*
+### GET /api/v1/admin/volume  *(permission VIEW_USERS)*
 
 Time-bucketed confirmed-transfer volume aggregated in USD.
 
@@ -597,7 +601,7 @@ Severity is **derived server-side** from the action constant — clients
 must not reclassify. The mapping is canonical and documented as
 BR-AD-10 in `docs/business-rules.md`.
 
-### GET /api/v1/admin/movements/top  *(permission VIEW_TRANSFERS)*
+### GET /api/v1/admin/movements/top  *(permission VIEW_WALLETS)*
 
 Largest confirmed transfers in the window, ordered by USD-equivalent
 amount descending.
