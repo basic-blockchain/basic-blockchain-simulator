@@ -169,29 +169,32 @@ referenced: `RANGE_INVALID`, `COMPARE_INVALID`, `SEVERITY_INVALID`.
 These rules pin the shape and semantics of the Phase 7.8 treasury
 dual-sign envelope (`/admin/treasury/distribute/*` and the
 threshold-gated dual-sign extension of `/admin/mint`) **before** any
-implementation lands. The full contract — endpoint shapes, request /
-response payloads, state machine, schema and migration plan — lives
-in [`docs/specs/7.8.0-treasury-dual-sign.md`](specs/7.8.0-treasury-dual-sign.md).
+implementation lands. DISTRIBUTE and MINT live in **separate tables**
+(`treasury_distributions`, `treasury_mint_ops`) with **separate
+endpoints** — see §11 of the spec for the rationale. The full
+contract — endpoint shapes, request / response payloads, state
+machine, schema and migration plan — lives in
+[`docs/specs/7.8.0-treasury-dual-sign.md`](specs/7.8.0-treasury-dual-sign.md).
 The rule rows below are stubs; the full text per rule lands with the
 code in sub-phases 7.8.1 → 7.8.7. New error codes referenced:
-`SAME_SIGNER_FORBIDDEN`, `TREASURY_OP_NOT_FOUND`,
-`TREASURY_OP_NOT_PENDING`, `TREASURY_OP_WRONG_KIND`, `NOT_INITIATOR`,
-`WALLET_NOT_TREASURY`, `CURRENCY_MISMATCH`, `RECIPIENTS_EMPTY`,
-`RECIPIENTS_DUPLICATE`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_NO_WALLET`,
-`INSUFFICIENT_FUNDS`.
+`SAME_SIGNER_FORBIDDEN`, `DISTRIBUTION_NOT_FOUND`,
+`DISTRIBUTION_NOT_PENDING`, `MINT_OP_NOT_FOUND`,
+`MINT_OP_NOT_PENDING`, `NOT_INITIATOR`, `WALLET_NOT_TREASURY`,
+`CURRENCY_MISMATCH`, `RECIPIENTS_EMPTY`, `RECIPIENTS_DUPLICATE`,
+`RECIPIENT_NOT_FOUND`, `RECIPIENT_NO_WALLET`, `INSUFFICIENT_FUNDS`.
 
 | ID | Rule | Enforcement layer |
 |----|------|-------------------|
-| BR-TR-01 | `SAME_SIGNER_FORBIDDEN` — approver `user_id` must differ from `initiated_by`, enforced both at the service layer **and** by a `CHECK` constraint on `treasury_operations.approved_by`. | `services/treasury_service.py`, migration `V021` |
-| BR-TR-02 | Distribution recipients must each own a non-treasury wallet in the op currency; missing → `RECIPIENT_NO_WALLET`. | `services/treasury_service.py` |
-| BR-TR-03 | Duplicate ids in `recipient_user_ids` return `RECIPIENTS_DUPLICATE`; the service never silently de-duplicates. | `services/treasury_service.py` |
-| BR-TR-04 | Approval is **atomic** with execution: the op transitions to `executed` in the same critical section that submits the N transfers / the mint. Partial execution is forbidden — any submission failure rolls back prior submissions and leaves the op `pending_approval`. | `services/treasury_service.py` |
-| BR-TR-05 | `executed` and `cancelled` are terminal — any further mutation returns `TREASURY_OP_NOT_PENDING`. | `services/treasury_service.py` |
-| BR-TR-06 | Only the initiator can cancel a pending op (`NOT_INITIATOR` otherwise); approval can come from any actor with `APPROVE_TREASURY_OP` other than the initiator. | `services/treasury_service.py` |
-| BR-TR-07 | Mint threshold: when `amount >= MINT_DUAL_SIGN_THRESHOLD` (env var, default `0` = disabled), `POST /admin/mint` returns 202 + op_id and routes through the dual-sign envelope. Below threshold the route preserves today's synchronous 201 response bit-for-bit. | `api/wallet_routes.py`, `services/mint_service.py` |
-| BR-TR-08 | Supply conservation: a distribution emits exactly `N` transfers of `amount_per_wallet` each (totalling `N * amount_per_wallet`); a dual-sign mint emits exactly one coinbase identical to today's mint. The envelope adds zero supply, only gating. | `services/treasury_service.py`, supply-conservation tests |
-| BR-TR-09 | Audit lifecycle: `TREASURY_OP_INITIATED` → `TREASURY_OP_APPROVED` → `TREASURY_OP_EXECUTED` on the happy path; `TREASURY_OP_CANCELLED` on the cancellation path. Severity (BR-AD-10): `EXECUTED` → `critical`; the rest → `warning`. | `domain/audit.py` |
-| BR-TR-10 | `GET /admin/treasury/distribute` returns all ops to ADMIN and OPERATOR (read-only); no per-row scoping in this phase. | `api/admin_routes.py` |
+| BR-TR-01 | `SAME_SIGNER_FORBIDDEN` — approver `user_id` must differ from `initiated_by`, enforced both at the service layer **and** by a `CHECK` constraint on each table (`chk_dist_same_signer` on `treasury_distributions`, `chk_mint_same_signer` on `treasury_mint_ops`). | `services/treasury_distribution_service.py`, `services/mint_service.py`, migrations `V021`/`V022` |
+| BR-TR-02 | Distribution recipients must each own a non-treasury wallet in the op currency; missing → `RECIPIENT_NO_WALLET`. | `services/treasury_distribution_service.py` |
+| BR-TR-03 | Duplicate ids in `recipient_user_ids` return `RECIPIENTS_DUPLICATE`; the service never silently de-duplicates. | `services/treasury_distribution_service.py` |
+| BR-TR-04 | Approval is **atomic** with execution: the op transitions to `executed` in the same critical section that submits the N transfers / the mint. Partial execution is forbidden — any submission failure rolls back prior submissions and leaves the op `pending_approval`. | `services/treasury_distribution_service.py`, `services/mint_service.py` |
+| BR-TR-05 | `executed` and `cancelled` are terminal — any further mutation returns `DISTRIBUTION_NOT_PENDING` / `MINT_OP_NOT_PENDING` (per entity). | `services/treasury_distribution_service.py`, `services/mint_service.py` |
+| BR-TR-06 | Only the initiator can cancel a pending op (`NOT_INITIATOR` otherwise); approval can come from any actor with the per-entity approve permission other than the initiator. | `services/treasury_distribution_service.py`, `services/mint_service.py` |
+| BR-TR-07 | Mint threshold: when `amount >= MINT_DUAL_SIGN_THRESHOLD` (env var, default `0` = disabled), `POST /admin/mint` returns 202 + op_id and writes a row into `treasury_mint_ops`. Below threshold the route preserves today's synchronous 201 response bit-for-bit and writes no row. | `api/wallet_routes.py`, `services/mint_service.py` |
+| BR-TR-08 | Supply conservation: a distribution emits exactly `N` transfers of `amount_per_wallet` each (totalling `N * amount_per_wallet`); a dual-sign mint emits exactly one coinbase identical to today's mint. The envelope adds zero supply, only gating. | `services/treasury_distribution_service.py`, `services/mint_service.py`, supply-conservation tests |
+| BR-TR-09 | Audit lifecycle per entity: distributions → `TREASURY_DISTRIBUTION_{INITIATED,APPROVED,EXECUTED,CANCELLED}`; mint ops → `TREASURY_MINT_OP_{INITIATED,APPROVED,EXECUTED,CANCELLED}`. Severity (BR-AD-10): both `*_EXECUTED` → `critical`; every `*_INITIATED`, `*_APPROVED`, `*_CANCELLED` → `warning`. The existing synchronous `MINT` action is unchanged. | `domain/audit.py` |
+| BR-TR-10 | `GET /admin/treasury/distribute` and `GET /admin/mint/operations` each return only their own entity to ADMIN and OPERATOR (read-only); no per-row scoping in this phase. | `api/admin_routes.py`, `api/wallet_routes.py` |
 
 ---
 
