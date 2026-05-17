@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Final
 
 from quart import Blueprint, jsonify, request
 
@@ -99,6 +100,24 @@ _COMPARE_WINDOWS: dict[str, timedelta] = {
     "30d": timedelta(days=30),
 }
 
+_VOLUME_RANGES: dict[str, timedelta] = {
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+    "1y":  timedelta(days=365),
+}
+
+_VOLUME_DEFAULT_BUCKET: dict[str, str] = {
+    "30d": "day", "90d": "week", "1y": "week",
+}
+
+_MOVEMENTS_RANGES: dict[str, timedelta] = {
+    "24h": timedelta(hours=24),
+    "7d":  timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+_USD_CURRENCY: Final[str] = "USD"
+
 
 def _parse_iso(value: str | None) -> datetime | None:
     """Parse an ISO8601 timestamp into UTC-aware datetime; None on fail."""
@@ -126,6 +145,116 @@ def _delta_block(current: int, previous: int) -> dict[str, object]:
         "delta_abs": delta_abs,
         "delta_pct": delta_pct,
     }
+
+
+def _bucket_key_for(ts: datetime, *, bucket: str) -> str:
+    """ISO date label for a bucket: `YYYY-MM-DD` for day, the Monday of
+    the ISO week for week."""
+    if bucket == "week":
+        monday = ts - timedelta(days=ts.weekday())
+        return monday.date().isoformat()
+    return ts.date().isoformat()
+
+
+def _bucket_keys(*, since: datetime, until: datetime, bucket: str) -> list[str]:
+    """Pre-built grid of bucket keys covering `[since, until]`."""
+    step = timedelta(days=7) if bucket == "week" else timedelta(days=1)
+    cursor = since
+    keys: list[str] = []
+    seen: set[str] = set()
+    while cursor <= until:
+        k = _bucket_key_for(cursor, bucket=bucket)
+        if k not in seen:
+            seen.add(k)
+            keys.append(k)
+        cursor += step
+    # Include the final boundary in case the loop stopped one step shy
+    final = _bucket_key_for(until, bucket=bucket)
+    if final not in seen:
+        keys.append(final)
+    return keys
+
+
+def _owner_of(wallets: WalletRepositoryProtocol, wallet_id: str) -> str:
+    """Look up the user_id that owns a wallet; empty string when the
+    wallet is missing (rare — a tx references a deleted wallet)."""
+    if not wallet_id:
+        return ""
+    rec = wallets.get_wallet(wallet_id)
+    return rec.user_id if rec else ""
+
+
+def _convert_to_usd(
+    *,
+    currencies: CurrencyRepositoryProtocol,
+    from_currency: str,
+    amount: Decimal,
+    at: datetime,
+) -> Decimal | None:
+    """Convert an amount to USD using the rate as of `at` (BR-AD-06).
+    Returns `None` when no rate exists at-or-before that point."""
+    if from_currency == _USD_CURRENCY:
+        return amount
+    rate = currencies.get_rate_at(
+        from_currency=from_currency,
+        to_currency=_USD_CURRENCY,
+        at=at,
+    )
+    if rate is None:
+        return None
+    return (amount * rate.rate).quantize(Decimal("0.01"))
+
+
+def _iter_confirmed_with_meta(
+    *,
+    blockchain: BlockchainService,
+    wallets: WalletRepositoryProtocol,
+    currencies: CurrencyRepositoryProtocol,
+    since: datetime,
+    until: datetime,
+):
+    """Yield `(ts, currency, amount, usd_or_None, tx, block_index)` for
+    every confirmed transaction whose block timestamp falls in
+    `[since, until]`. Currency is resolved from the sender wallet (or
+    receiver wallet when sender is missing — e.g. mint/coinbase)."""
+    for block in blockchain.chain:
+        ts = _parse_iso(block.timestamp)
+        if ts is None or not (since <= ts <= until):
+            continue
+        for tx in block.transactions:
+            sender_wallet = wallets.get_wallet(tx.sender_wallet_id) if tx.sender_wallet_id else None
+            receiver_wallet = wallets.get_wallet(tx.receiver_wallet_id) if tx.receiver_wallet_id else None
+            currency = (
+                sender_wallet.currency if sender_wallet
+                else (receiver_wallet.currency if receiver_wallet else None)
+            )
+            if currency is None:
+                continue
+            amount = Decimal(str(tx.amount))
+            usd = _convert_to_usd(
+                currencies=currencies,
+                from_currency=currency,
+                amount=amount,
+                at=ts,
+            )
+            yield ts, currency, amount, usd, tx, block.index
+
+
+def _iter_confirmed_in_window(
+    *,
+    blockchain: BlockchainService,
+    wallets: WalletRepositoryProtocol,
+    currencies: CurrencyRepositoryProtocol,
+    since: datetime,
+    until: datetime,
+):
+    """Shorter form of `_iter_confirmed_with_meta` for callers that
+    only need (ts, currency, amount, usd)."""
+    for ts, currency, amount, usd, _tx, _idx in _iter_confirmed_with_meta(
+        blockchain=blockchain, wallets=wallets, currencies=currencies,
+        since=since, until=until,
+    ):
+        yield ts, currency, amount, usd
 
 
 def _count_tx_in_windows(
@@ -1154,5 +1283,155 @@ def build_admin_blueprint(
             }
 
         return jsonify(payload), 200
+
+    # ── GET /admin/volume ────────────────────────────────────────────
+
+    @bp.route("/volume", methods=["GET"])
+    @require_permission(Permission.VIEW_TRANSFERS)
+    async def get_volume():
+        range_token = request.args.get("range")
+        if range_token not in _VOLUME_RANGES:
+            return bad_request(
+                f"range must be one of {sorted(_VOLUME_RANGES)}",
+                "RANGE_INVALID",
+            )
+        bucket = request.args.get("bucket") or _VOLUME_DEFAULT_BUCKET[range_token]
+        if bucket not in {"day", "week"}:
+            return bad_request("bucket must be 'day' or 'week'", "VALIDATION_ERROR")
+
+        now = datetime.now(timezone.utc)
+        since = now - _VOLUME_RANGES[range_token]
+
+        # Pre-build empty buckets so the response carries a continuous
+        # axis (BR-AD-08) regardless of whether any tx fell on each day.
+        bucket_keys = _bucket_keys(since=since, until=now, bucket=bucket)
+        per_bucket: dict[str, dict[str, object]] = {
+            k: {"ts": k, "volume_usd": Decimal("0"), "tx_count": 0, "unpriced_count": 0}
+            for k in bucket_keys
+        }
+        total_usd = Decimal("0")
+        total_count = 0
+        total_unpriced = 0
+
+        for ts, currency, amount, usd in _iter_confirmed_in_window(
+            blockchain=blockchain,
+            wallets=wallets,
+            currencies=currencies,
+            since=since,
+            until=now,
+        ):
+            key = _bucket_key_for(ts, bucket=bucket)
+            row = per_bucket.get(key)
+            if row is None:
+                # Tx fell just inside the window but rounding put its
+                # key outside the pre-built grid (rare on day boundary
+                # crossings) — append on the fly.
+                row = {"ts": key, "volume_usd": Decimal("0"), "tx_count": 0, "unpriced_count": 0}
+                per_bucket[key] = row
+            row["tx_count"] = int(row["tx_count"]) + 1
+            total_count += 1
+            if usd is None:
+                row["unpriced_count"] = int(row["unpriced_count"]) + 1
+                total_unpriced += 1
+            else:
+                row["volume_usd"] = Decimal(str(row["volume_usd"])) + usd
+                total_usd += usd
+
+        series = []
+        for k in sorted(per_bucket.keys()):
+            row = per_bucket[k]
+            series.append(
+                {
+                    "ts": k,
+                    "volume_usd": str(row["volume_usd"]),
+                    "tx_count": int(row["tx_count"]),
+                    "unpriced_count": int(row["unpriced_count"]),
+                }
+            )
+
+        return (
+            jsonify(
+                {
+                    "range": range_token,
+                    "bucket": bucket,
+                    "currency": _USD_CURRENCY,
+                    "series": series,
+                    "totals": {
+                        "volume_usd": str(total_usd),
+                        "tx_count": total_count,
+                        "unpriced_count": total_unpriced,
+                    },
+                }
+            ),
+            200,
+        )
+
+    # ── GET /admin/movements/top ─────────────────────────────────────
+
+    @bp.route("/movements/top", methods=["GET"])
+    @require_permission(Permission.VIEW_TRANSFERS)
+    async def get_movements_top():
+        range_token = request.args.get("range", "24h")
+        if range_token not in _MOVEMENTS_RANGES:
+            return bad_request(
+                f"range must be one of {sorted(_MOVEMENTS_RANGES)}",
+                "RANGE_INVALID",
+            )
+        try:
+            limit = int(request.args.get("limit", "10"))
+        except ValueError:
+            return bad_request("limit must be an integer", "VALIDATION_ERROR")
+        limit = max(1, min(limit, 50))
+
+        now = datetime.now(timezone.utc)
+        since = now - _MOVEMENTS_RANGES[range_token]
+
+        scored: list[tuple[Decimal, dict[str, object]]] = []
+        total_volume = Decimal("0")
+        for ts, currency, amount, usd, tx, block_index in _iter_confirmed_with_meta(
+            blockchain=blockchain,
+            wallets=wallets,
+            currencies=currencies,
+            since=since,
+            until=now,
+        ):
+            # BR-AD-12: drop unpriced rows from a USD-ranked list.
+            if usd is None:
+                continue
+            sender_user = users.get_user_by_id(_owner_of(wallets, tx.sender_wallet_id))
+            receiver_user = users.get_user_by_id(_owner_of(wallets, tx.receiver_wallet_id))
+            scored.append(
+                (
+                    usd,
+                    {
+                        "tx_id": tx.signature or f"{block_index}:{tx.nonce}",
+                        "block_height": block_index,
+                        "currency": currency,
+                        "amount": str(amount),
+                        "amount_usd": str(usd),
+                        "from_user_id": sender_user.user_id if sender_user else None,
+                        "from_username": sender_user.username if sender_user else None,
+                        "to_user_id": receiver_user.user_id if receiver_user else None,
+                        "to_username": receiver_user.username if receiver_user else None,
+                        "confirmed_at": ts.isoformat(),
+                    },
+                )
+            )
+            total_volume += usd
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        movements = [row for _, row in scored[:limit]]
+        return (
+            jsonify(
+                {
+                    "range": range_token,
+                    "movements": movements,
+                    "count": len(movements),
+                    "limit": limit,
+                    "total_volume_usd": str(total_volume),
+                }
+            ),
+            200,
+        )
 
     return bp
