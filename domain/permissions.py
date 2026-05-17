@@ -58,6 +58,13 @@ class Permission(str, Enum):
     # KYC admin review (Phase 6g-admin)
     REVIEW_KYC = "REVIEW_KYC"
 
+    # Treasury dual-sign envelope (Phase 7.8 — BR-TR-*)
+    INITIATE_TREASURY_DISTRIBUTION = "INITIATE_TREASURY_DISTRIBUTION"
+    APPROVE_TREASURY_DISTRIBUTION = "APPROVE_TREASURY_DISTRIBUTION"
+    VIEW_TREASURY_DISTRIBUTIONS = "VIEW_TREASURY_DISTRIBUTIONS"
+    APPROVE_TREASURY_MINT_OP = "APPROVE_TREASURY_MINT_OP"
+    VIEW_TREASURY_MINT_OPS = "VIEW_TREASURY_MINT_OPS"
+
 
 # Role baselines — least-privilege by default.
 #
@@ -109,6 +116,16 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.MANAGE_EXCHANGE_RATES.value,
         # KYC admin review (Phase 6g-admin).
         Permission.REVIEW_KYC.value,
+        # Treasury dual-sign envelope (Phase 7.8 — BR-TR-*).
+        # Per spec §5 / BR-TR-09: ADMIN holds initiate / approve / view
+        # for distributions, and approve / view for mint ops. The
+        # existing MINT permission still gates the underlying coinbase
+        # build and is NOT in this baseline.
+        Permission.INITIATE_TREASURY_DISTRIBUTION.value,
+        Permission.APPROVE_TREASURY_DISTRIBUTION.value,
+        Permission.VIEW_TREASURY_DISTRIBUTIONS.value,
+        Permission.APPROVE_TREASURY_MINT_OP.value,
+        Permission.VIEW_TREASURY_MINT_OPS.value,
         # NOTE: MINT and VIEW_TRANSFERS are deliberately absent.
         # Grant them per-admin via `user_permissions` when needed.
     },
@@ -117,6 +134,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.TRANSFER.value,
         Permission.VIEW_WALLETS.value,
         Permission.VIEW_TRANSFERS.value,
+        # Read-only treasury surfaces (BR-TR-10) — OPERATOR can monitor
+        # but neither initiate nor approve.
+        Permission.VIEW_TREASURY_DISTRIBUTIONS.value,
+        Permission.VIEW_TREASURY_MINT_OPS.value,
     },
     Role.VIEWER.value: {
         Permission.CREATE_WALLET.value,
