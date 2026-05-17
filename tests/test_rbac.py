@@ -101,6 +101,65 @@ def test_viewer_cannot_mint():
     )
 
 
+def test_admin_baseline_holds_treasury_dual_sign_permissions():
+    """Phase 7.8.6: ADMIN holds initiate / approve / view for
+    distributions and view for mint ops as their baseline
+    (spec §5 / BR-TR-09). MINT and APPROVE_TREASURY_MINT_OP remain
+    absent — both unlock supply-mutating paths and require a per-admin
+    grant via `user_permissions` (BR-TR-11 / BR-WL-07)."""
+    for perm in (
+        Permission.INITIATE_TREASURY_DISTRIBUTION,
+        Permission.APPROVE_TREASURY_DISTRIBUTION,
+        Permission.VIEW_TREASURY_DISTRIBUTIONS,
+        Permission.VIEW_TREASURY_MINT_OPS,
+    ):
+        assert has_permission(
+            user_id="u", roles=[Role.ADMIN.value], permission=perm.value
+        ), f"ADMIN should hold {perm.value} by default"
+    assert not has_permission(
+        user_id="u",
+        roles=[Role.ADMIN.value],
+        permission=Permission.APPROVE_TREASURY_MINT_OP.value,
+    ), (
+        "ADMIN must NOT hold APPROVE_TREASURY_MINT_OP by default — it "
+        "modifies supply (BR-TR-11 / BR-WL-07) and requires a per-admin grant"
+    )
+
+
+def test_operator_baseline_holds_only_view_treasury_permissions():
+    """Phase 7.8.6 + BR-TR-10: OPERATOR can monitor treasury ops but
+    cannot initiate or approve."""
+    for perm in (
+        Permission.VIEW_TREASURY_DISTRIBUTIONS,
+        Permission.VIEW_TREASURY_MINT_OPS,
+    ):
+        assert has_permission(
+            user_id="u", roles=[Role.OPERATOR.value], permission=perm.value
+        ), f"OPERATOR should hold {perm.value} by default"
+    for perm in (
+        Permission.INITIATE_TREASURY_DISTRIBUTION,
+        Permission.APPROVE_TREASURY_DISTRIBUTION,
+        Permission.APPROVE_TREASURY_MINT_OP,
+    ):
+        assert not has_permission(
+            user_id="u", roles=[Role.OPERATOR.value], permission=perm.value
+        ), f"OPERATOR should NOT hold {perm.value} by default"
+
+
+def test_viewer_cannot_initiate_or_view_treasury():
+    """VIEWER has zero treasury surface in the baseline."""
+    for perm in (
+        Permission.INITIATE_TREASURY_DISTRIBUTION,
+        Permission.APPROVE_TREASURY_DISTRIBUTION,
+        Permission.VIEW_TREASURY_DISTRIBUTIONS,
+        Permission.APPROVE_TREASURY_MINT_OP,
+        Permission.VIEW_TREASURY_MINT_OPS,
+    ):
+        assert not has_permission(
+            user_id="u", roles=[Role.VIEWER.value], permission=perm.value
+        ), f"VIEWER should NOT hold {perm.value} by default"
+
+
 def test_user_override_grants_unprivileged_permission():
     assert has_permission(
         user_id="u",
