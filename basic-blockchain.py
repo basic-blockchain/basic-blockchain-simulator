@@ -25,6 +25,8 @@ from api.websocket_hub import WebSocketHub
 from config import (
     BCRYPT_ROUNDS,
     BOOTSTRAP_ADMIN_USERNAME,
+    DASHBOARD_BOOTSTRAP_SEED,
+    DASHBOARD_QUOTE_CURRENCY,
     DATABASE_URL,
     DIFFICULTY_PREFIX,
     EXCHANGE_FEED_ENABLED,
@@ -191,6 +193,17 @@ def create_app(
     consensus = ConsensusService(blockchain=chain_service, registry=registry)
     propagator = propagation or PropagationService(registry=registry)
     hub = ws_hub or WebSocketHub()
+
+    # Phase 6i.1 — seed the dashboard's currencies + X/<quote> rates on
+    # first boot so /admin/* USD aggregates are non-zero out of the
+    # box. Idempotent: existing rows are detected and skipped.
+    if DASHBOARD_BOOTSTRAP_SEED and not TESTING:
+        from infrastructure.dashboard_seed import bootstrap_dashboard_seed
+
+        bootstrap_dashboard_seed(
+            currencies=currency_store,
+            quote_currency=DASHBOARD_QUOTE_CURRENCY,
+        )
 
     # Phase I.1: install JWT middleware. The middleware no-ops on PUBLIC_PATHS
     # and rejects malformed/expired tokens with 401 before the route runs.
@@ -412,6 +425,7 @@ def create_app(
         users=user_store,
         wallets=wallet_store,
         currencies=currency_store,
+        blockchain=chain_service,
         bcrypt_rounds=BCRYPT_ROUNDS,
     )
     api_v1.register_blueprint(admin_bp)

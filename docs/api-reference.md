@@ -449,18 +449,29 @@ Returns the most recent admin audit entries (newest first). Optional
 
 ### GET /api/v1/admin/wallets  *(permission VIEW_WALLETS)*
 
-Returns all wallets across users with owner metadata.
+Returns all wallets across users with owner metadata. Phase 6i adds
+USD enrichment on every row plus aggregate totals.
 
 ```json
 {
   "wallets": [
-    { "wallet_id": "w_...", "user_id": "...", "username": "alice",
+    {
+      "wallet_id": "w_...", "user_id": "...", "username": "alice",
       "display_name": "Alice", "currency": "NATIVE", "balance": "100.0",
-      "public_key": "02f3...", "frozen": false }
+      "balance_usd": "1500.00",
+      "public_key": "02f3...", "frozen": false
+    }
   ],
-  "count": 1
+  "count": 1,
+  "total_balance_usd": "1500.00",
+  "unpriced_currencies": []
 }
 ```
+
+`balance_usd` uses `get_rate_at(currency, USD, now)`. Wallets whose
+currency has no rate today get `balance_usd: null` (BR-AD-07 — never
+silently zero), and their currency code appears in
+`unpriced_currencies` so the dashboard can surface the gap.
 
 ### POST /api/v1/admin/wallets/<wallet_id>/freeze  *(permission FREEZE_WALLET)*
 
@@ -475,6 +486,171 @@ Returns all wallets across users with owner metadata.
 ```json
 { "wallet_id": "w_...", "frozen": false }
 ```
+
+---
+
+## Admin dashboard endpoints (Phase 6e — proposed contracts)
+
+The following endpoints back the Phase 6e `AdminView` widgets (volume
+chart, asset composition, critical-events feed, top movements, trend
+pills). They are **specified here in Phase 6e.0** before any code
+lands so the backend (6e.1) and frontend (6e.2) sub-phases can move
+in parallel against a stable contract.
+
+All routes are mounted under `/api/v1/admin` and gated by permissions
+already in the ADMIN baseline so the dashboard renders for every admin
+without a per-user grant: `/admin/volume` and `/admin/stats?compare=`
+use `VIEW_USERS` (aggregated counts); `/admin/movements/top` uses
+`VIEW_WALLETS` (lists individual transfers with owner metadata, same
+disclosure surface as `/admin/wallets`); `/admin/audit` keeps
+`VIEW_AUDIT_LOG`. New error codes: `RANGE_INVALID`, `COMPARE_INVALID`,
+`SEVERITY_INVALID`.
+
+USD aggregation everywhere uses the exchange rate **as of the
+transaction's `confirmed_at`**, not the current rate, so historical
+charts do not retroactively shift when rates move. When a rate is
+missing for the pair the transaction is omitted from the
+USD-aggregated number (and surfaced in `unpriced_count`) — never
+silently zeroed.
+
+### GET /api/v1/admin/volume  *(permission VIEW_USERS)*
+
+Time-bucketed confirmed-transfer volume aggregated in USD.
+
+**Query parameters**
+
+| Name | Required | Allowed | Default | Notes |
+|------|----------|---------|---------|-------|
+| `range`  | yes | `30d` `90d` `1y` | — | Window ending at request time. |
+| `bucket` | no  | `day` `week`     | `day` for `30d`, `week` otherwise | Aggregation granularity. |
+
+**Response 200**
+```json
+{
+  "range": "30d",
+  "bucket": "day",
+  "currency": "USD",
+  "series": [
+    { "ts": "2026-04-17", "volume_usd": "12345.67", "tx_count": 42, "unpriced_count": 0 },
+    { "ts": "2026-04-18", "volume_usd": "9800.00",  "tx_count": 31, "unpriced_count": 2 }
+  ],
+  "totals": { "volume_usd": "350000.00", "tx_count": 1200, "unpriced_count": 15 }
+}
+```
+
+Empty buckets are emitted with `volume_usd: "0"` and `tx_count: 0` so
+the frontend can render a continuous axis without client-side
+back-filling.
+
+### GET /api/v1/admin/stats  *(permission VIEW_USERS — already implemented)*
+
+The endpoint already exists; Phase 6e adds an optional `?compare=`
+parameter that appends a `compare` block with deltas vs. the prior
+window. Without the parameter the response is unchanged.
+
+**Query parameters**
+
+| Name | Required | Allowed | Notes |
+|------|----------|---------|-------|
+| `compare` | no | `7d` `30d` | When present, response gains the `compare` block below. |
+
+**Response 200 (with `?compare=7d`)**
+```json
+{
+  "users": { "total": 120, "active": 80, "banned": 3, "deleted": 1 },
+  "wallets": { "total": 240, "user_wallets": 220, "frozen": 4, "frozen_user_wallets": 3 },
+  "balances": { "NATIVE": "12500.00", "BTC": "0.5" },
+  "compare": {
+    "range": "7d",
+    "previous_period_end": "2026-05-09T23:59:59Z",
+    "users": {
+      "total":  { "current": 120, "previous": 100, "delta_abs": 20, "delta_pct": 20.0 },
+      "active": { "current": 80,  "previous": 70,  "delta_abs": 10, "delta_pct": 14.29 }
+    },
+    "transactions": {
+      "count":      { "current": 230,    "previous": 180,    "delta_abs": 50,    "delta_pct": 27.78 },
+      "volume_usd": { "current": "55000","previous": "40000","delta_abs": "15000","delta_pct": 37.5 }
+    }
+  }
+}
+```
+
+`delta_pct` is `null` when the previous-period value is zero (no
+"divide by zero" sentinel, no `Infinity`). `delta_abs` is always
+present and uses the same numeric encoding as the current value
+(string for `volume_usd`, integer otherwise).
+
+### GET /api/v1/admin/audit  *(permission VIEW_AUDIT_LOG — extended)*
+
+Phase 6e extends the existing endpoint with two query parameters and
+attaches a `severity` field to every entry. The current shape (plus
+`limit`, `action`, `actor_id`, `target_id`) is unchanged.
+
+**New query parameters**
+
+| Name | Required | Allowed | Notes |
+|------|----------|---------|-------|
+| `severity` | no | `critical` `warning` `info` | Filter to entries at that severity. |
+| `since`    | no | `1h` `24h` `7d` `30d`       | Filter to entries newer than the window. Combined with `limit`. |
+
+**Response 200**
+```json
+{
+  "entries": [
+    {
+      "id": 12, "actor_id": "...", "action": "USER_BANNED", "target_id": "...",
+      "details": {}, "created_at": "2026-05-16T12:34:56Z",
+      "severity": "critical"
+    }
+  ],
+  "count": 1,
+  "filters": { "severity": "critical", "since": "24h", "action": null, "actor_id": null, "target_id": null }
+}
+```
+
+Severity is **derived server-side** from the action constant — clients
+must not reclassify. The mapping is canonical and documented as
+BR-AD-10 in `docs/business-rules.md`.
+
+### GET /api/v1/admin/movements/top  *(permission VIEW_WALLETS)*
+
+Largest confirmed transfers in the window, ordered by USD-equivalent
+amount descending.
+
+**Query parameters**
+
+| Name | Required | Allowed | Default | Notes |
+|------|----------|---------|---------|-------|
+| `range` | no | `24h` `7d` `30d` | `24h` | Window ending at request time. |
+| `limit` | no | `1..50`          | `10`  | Capped at 50 to keep the table fast. |
+
+**Response 200**
+```json
+{
+  "range": "24h",
+  "movements": [
+    {
+      "tx_id": "abc123…",
+      "block_height": 4711,
+      "currency": "BTC",
+      "amount": "0.5",
+      "amount_usd": "30000.00",
+      "from_user_id": "u1", "from_username": "alice",
+      "to_user_id":   "u2", "to_username":   "bob",
+      "confirmed_at": "2026-05-16T12:34:56Z"
+    }
+  ],
+  "count": 10,
+  "limit": 10,
+  "total_volume_usd": "150000.00"
+}
+```
+
+Transfers whose pair has no rate at `confirmed_at` are **excluded** —
+USD-ranked lists must not show "$0.00" rows. The exclusion is reflected
+in `total_volume_usd` (lower than the unfiltered sum) but is not
+returned as a separate counter; use `/admin/volume` (`unpriced_count`)
+if you need the gap.
 
 ---
 
