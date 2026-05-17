@@ -189,26 +189,34 @@ async def test_register_persists_country_uppercased(monkeypatch):
     import config
 
     importlib.reload(config)
-    module = _load_module()
-    async with module.create_app().test_client() as client:
-        # Lowercase input must round-trip as uppercase in storage.
-        await _register_and_activate(client, username="alice")
-        await client.post(
-            "/api/v1/auth/register",
-            json={"username": "bob", "display_name": "Bob", "country": "co"},
-        )
-        login = await client.post(
-            "/api/v1/auth/login",
-            json={"username": "alice", "password": "hunter12345"},
-        )
-        token = (await login.get_json())["access_token"]
-        r = await client.get(
-            "/api/v1/admin/users",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        rows = (await r.get_json())["users"]
-        bob = next(u for u in rows if u["username"] == "bob")
-        assert bob["country"] == "CO"
+    try:
+        module = _load_module()
+        async with module.create_app().test_client() as client:
+            # Lowercase input must round-trip as uppercase in storage.
+            await _register_and_activate(client, username="alice")
+            await client.post(
+                "/api/v1/auth/register",
+                json={"username": "bob", "display_name": "Bob", "country": "co"},
+            )
+            login = await client.post(
+                "/api/v1/auth/login",
+                json={"username": "alice", "password": "hunter12345"},
+            )
+            token = (await login.get_json())["access_token"]
+            r = await client.get(
+                "/api/v1/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            rows = (await r.get_json())["users"]
+            bob = next(u for u in rows if u["username"] == "bob")
+            assert bob["country"] == "CO"
+    finally:
+        # `monkeypatch.setenv` restores the env at teardown, but the
+        # already-loaded `config` module cached the "alice" value above.
+        # Reload it once env is back to baseline so later tests do not
+        # observe a leaked bootstrap-admin promotion.
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
 
 
 async def test_register_rejects_invalid_country():
@@ -235,26 +243,30 @@ async def test_login_stamps_last_active(monkeypatch):
     import config
 
     importlib.reload(config)
-    module = _load_module()
-    async with module.create_app().test_client() as client:
-        # Register + activate the admin so /admin/users is reachable.
-        await _register_and_activate(client, username="alice")
-        before = await client.post(
-            "/api/v1/auth/login",
-            json={"username": "alice", "password": "hunter12345"},
-        )
-        assert before.status_code == 200
-        token = (await before.get_json())["access_token"]
-        r = await client.get(
-            "/api/v1/admin/users",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert r.status_code == 200
-        rows = (await r.get_json())["users"]
-        alice = next(u for u in rows if u["username"] == "alice")
-        # last_active was populated by the login above (in-memory store
-        # stamps an ISO8601 string).
-        assert alice["last_active"] is not None
+    try:
+        module = _load_module()
+        async with module.create_app().test_client() as client:
+            # Register + activate the admin so /admin/users is reachable.
+            await _register_and_activate(client, username="alice")
+            before = await client.post(
+                "/api/v1/auth/login",
+                json={"username": "alice", "password": "hunter12345"},
+            )
+            assert before.status_code == 200
+            token = (await before.get_json())["access_token"]
+            r = await client.get(
+                "/api/v1/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert r.status_code == 200
+            rows = (await r.get_json())["users"]
+            alice = next(u for u in rows if u["username"] == "alice")
+            # last_active was populated by the login above (in-memory store
+            # stamps an ISO8601 string).
+            assert alice["last_active"] is not None
+    finally:
+        monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
+        importlib.reload(config)
 
 
 async def test_register_rejects_missing_username():
