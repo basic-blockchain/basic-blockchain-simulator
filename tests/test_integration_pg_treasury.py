@@ -71,7 +71,7 @@ def test_distribution_round_trip_survives_new_store_instance(treasury_db):
     assert reloaded.memo == "grants"
 
 
-def test_distribution_mark_approved_executed_persists(treasury_db):
+def test_distribution_record_approval_and_execution_persists(treasury_db):
     store = PostgresTreasuryDistributionStore(treasury_db)
     op = store.create(
         currency="USDT",
@@ -81,7 +81,7 @@ def test_distribution_mark_approved_executed_persists(treasury_db):
         initiated_by="usr_admin1",
     )
 
-    updated = store.mark_approved_executed(
+    updated = store.record_approval_and_execution(
         op.op_id,
         approver_id="usr_admin2",
         executed_tx_ids=["tx_a"],
@@ -106,7 +106,7 @@ def test_distribution_chk_dist_same_signer_enforced_at_db(treasury_db):
     )
 
     with pytest.raises(TreasuryDistributionSameSignerError):
-        store.mark_approved_executed(
+        store.record_approval_and_execution(
             op.op_id,
             approver_id="usr_admin1",
             executed_tx_ids=["tx_a"],
@@ -116,7 +116,7 @@ def test_distribution_chk_dist_same_signer_enforced_at_db(treasury_db):
     assert store.get(op.op_id).status == STATUS_PENDING
 
 
-def test_distribution_mark_approved_executed_noop_when_not_pending(treasury_db):
+def test_distribution_record_approval_and_execution_noop_when_not_pending(treasury_db):
     store = PostgresTreasuryDistributionStore(treasury_db)
     op = store.create(
         currency="USDT",
@@ -125,11 +125,11 @@ def test_distribution_mark_approved_executed_noop_when_not_pending(treasury_db):
         recipient_user_ids=["u1"],
         initiated_by="usr_admin1",
     )
-    store.mark_approved_executed(
+    store.record_approval_and_execution(
         op.op_id, approver_id="usr_admin2", executed_tx_ids=["tx_a"]
     )
 
-    second = store.mark_approved_executed(
+    second = store.record_approval_and_execution(
         op.op_id, approver_id="usr_admin3", executed_tx_ids=["tx_b"]
     )
     assert second is None
@@ -199,7 +199,7 @@ def test_mint_op_round_trip_survives_new_store_instance(treasury_db):
     assert reloaded.reason == "big mint"
 
 
-def test_mint_op_mark_approved_executed_persists(treasury_db):
+def test_mint_op_record_approval_and_execution_persists(treasury_db):
     store = PostgresTreasuryMintOpStore(treasury_db)
     op = store.create(
         currency="USDT",
@@ -208,7 +208,7 @@ def test_mint_op_mark_approved_executed_persists(treasury_db):
         initiated_by="usr_admin1",
     )
 
-    updated = store.mark_approved_executed(
+    updated = store.record_approval_and_execution(
         op.op_id,
         approver_id="usr_admin2",
         executed_tx_id="tx_coinbase",
@@ -229,7 +229,7 @@ def test_mint_op_chk_mint_same_signer_enforced_at_db(treasury_db):
     )
 
     with pytest.raises(TreasuryMintOpSameSignerError):
-        store.mark_approved_executed(
+        store.record_approval_and_execution(
             op.op_id,
             approver_id="usr_admin1",
             executed_tx_id="tx_coinbase",
