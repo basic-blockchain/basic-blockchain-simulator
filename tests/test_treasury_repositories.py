@@ -87,7 +87,7 @@ def test_distribution_list_filters_by_status_and_orders_desc():
     assert [r.op_id for r in cancelled] == [older.op_id]
 
 
-def test_distribution_mark_approved_executed_happy_path():
+def test_distribution_record_approval_and_execution_happy_path():
     store = InMemoryTreasuryDistributionStore()
     op = store.create(
         currency="USDT",
@@ -97,7 +97,7 @@ def test_distribution_mark_approved_executed_happy_path():
         initiated_by="usr_admin1",
     )
 
-    updated = store.mark_approved_executed(
+    updated = store.record_approval_and_execution(
         op.op_id,
         approver_id="usr_admin2",
         executed_tx_ids=["tx_a", "tx_b"],
@@ -111,7 +111,7 @@ def test_distribution_mark_approved_executed_happy_path():
     assert updated.executed_tx_ids == ["tx_a", "tx_b"]
 
 
-def test_distribution_mark_approved_executed_rejects_same_signer():
+def test_distribution_record_approval_and_execution_rejects_same_signer():
     store = InMemoryTreasuryDistributionStore()
     op = store.create(
         currency="USDT",
@@ -122,7 +122,7 @@ def test_distribution_mark_approved_executed_rejects_same_signer():
     )
 
     with pytest.raises(TreasuryDistributionSameSignerError):
-        store.mark_approved_executed(
+        store.record_approval_and_execution(
             op.op_id,
             approver_id="usr_admin1",
             executed_tx_ids=["tx_a"],
@@ -132,7 +132,7 @@ def test_distribution_mark_approved_executed_rejects_same_signer():
     assert store.get(op.op_id).status == STATUS_PENDING
 
 
-def test_distribution_mark_approved_executed_noop_when_already_executed():
+def test_distribution_record_approval_and_execution_noop_when_already_executed():
     store = InMemoryTreasuryDistributionStore()
     op = store.create(
         currency="USDT",
@@ -141,11 +141,11 @@ def test_distribution_mark_approved_executed_noop_when_already_executed():
         recipient_user_ids=["u1"],
         initiated_by="usr_admin1",
     )
-    store.mark_approved_executed(
+    store.record_approval_and_execution(
         op.op_id, approver_id="usr_admin2", executed_tx_ids=["tx_a"]
     )
 
-    second = store.mark_approved_executed(
+    second = store.record_approval_and_execution(
         op.op_id, approver_id="usr_admin3", executed_tx_ids=["tx_b"]
     )
     assert second is None
@@ -177,7 +177,7 @@ def test_distribution_mark_cancelled_noop_when_not_pending():
         recipient_user_ids=["u1"],
         initiated_by="usr_admin1",
     )
-    store.mark_approved_executed(
+    store.record_approval_and_execution(
         op.op_id, approver_id="usr_admin2", executed_tx_ids=["tx_a"]
     )
 
@@ -206,7 +206,7 @@ def test_mint_op_create_returns_pending_record_with_tmo_prefix():
     assert record.executed_tx_id is None
 
 
-def test_mint_op_mark_approved_executed_happy_path():
+def test_mint_op_record_approval_and_execution_happy_path():
     store = InMemoryTreasuryMintOpStore()
     op = store.create(
         currency="USDT",
@@ -215,7 +215,7 @@ def test_mint_op_mark_approved_executed_happy_path():
         initiated_by="usr_admin1",
     )
 
-    updated = store.mark_approved_executed(
+    updated = store.record_approval_and_execution(
         op.op_id,
         approver_id="usr_admin2",
         executed_tx_id="tx_coinbase",
@@ -227,7 +227,7 @@ def test_mint_op_mark_approved_executed_happy_path():
     assert updated.executed_tx_id == "tx_coinbase"
 
 
-def test_mint_op_mark_approved_executed_rejects_same_signer():
+def test_mint_op_record_approval_and_execution_rejects_same_signer():
     store = InMemoryTreasuryMintOpStore()
     op = store.create(
         currency="USDT",
@@ -237,7 +237,7 @@ def test_mint_op_mark_approved_executed_rejects_same_signer():
     )
 
     with pytest.raises(TreasuryMintOpSameSignerError):
-        store.mark_approved_executed(
+        store.record_approval_and_execution(
             op.op_id,
             approver_id="usr_admin1",
             executed_tx_id="tx_coinbase",
@@ -273,7 +273,7 @@ def test_mint_op_list_filters_by_status_and_orders_desc():
         amount=Decimal("2"),
         initiated_by="usr_admin1",
     )
-    store.mark_approved_executed(
+    store.record_approval_and_execution(
         older.op_id, approver_id="usr_admin2", executed_tx_id="tx1"
     )
 
