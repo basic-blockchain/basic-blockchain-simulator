@@ -449,18 +449,29 @@ Returns the most recent admin audit entries (newest first). Optional
 
 ### GET /api/v1/admin/wallets  *(permission VIEW_WALLETS)*
 
-Returns all wallets across users with owner metadata.
+Returns all wallets across users with owner metadata. Phase 6i adds
+USD enrichment on every row plus aggregate totals.
 
 ```json
 {
   "wallets": [
-    { "wallet_id": "w_...", "user_id": "...", "username": "alice",
+    {
+      "wallet_id": "w_...", "user_id": "...", "username": "alice",
       "display_name": "Alice", "currency": "NATIVE", "balance": "100.0",
-      "public_key": "02f3...", "frozen": false }
+      "balance_usd": "1500.00",
+      "public_key": "02f3...", "frozen": false
+    }
   ],
-  "count": 1
+  "count": 1,
+  "total_balance_usd": "1500.00",
+  "unpriced_currencies": []
 }
 ```
+
+`balance_usd` uses `get_rate_at(currency, USD, now)`. Wallets whose
+currency has no rate today get `balance_usd: null` (BR-AD-07 — never
+silently zero), and their currency code appears in
+`unpriced_currencies` so the dashboard can surface the gap.
 
 ### POST /api/v1/admin/wallets/<wallet_id>/freeze  *(permission FREEZE_WALLET)*
 
