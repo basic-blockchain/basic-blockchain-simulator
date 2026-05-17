@@ -117,17 +117,21 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # KYC admin review (Phase 6g-admin).
         Permission.REVIEW_KYC.value,
         # Treasury dual-sign envelope (Phase 7.8 — BR-TR-*).
-        # Per spec §5 / BR-TR-09: ADMIN holds initiate / approve / view
-        # for distributions, and approve / view for mint ops. The
-        # existing MINT permission still gates the underlying coinbase
-        # build and is NOT in this baseline.
+        # ADMIN holds initiate / approve / view for distributions
+        # (no supply impact) and view for mint ops. The existing
+        # MINT permission and APPROVE_TREASURY_MINT_OP are both
+        # absent — see the note below (BR-TR-11 / BR-WL-07).
         Permission.INITIATE_TREASURY_DISTRIBUTION.value,
         Permission.APPROVE_TREASURY_DISTRIBUTION.value,
         Permission.VIEW_TREASURY_DISTRIBUTIONS.value,
-        Permission.APPROVE_TREASURY_MINT_OP.value,
         Permission.VIEW_TREASURY_MINT_OPS.value,
-        # NOTE: MINT and VIEW_TRANSFERS are deliberately absent.
-        # Grant them per-admin via `user_permissions` when needed.
+        # NOTE: MINT, VIEW_TRANSFERS and APPROVE_TREASURY_MINT_OP
+        # are deliberately absent. They each unlock a path that
+        # modifies token supply (MINT directly; APPROVE_TREASURY_MINT_OP
+        # via the dual-sign envelope) or exposes the full financial
+        # history (VIEW_TRANSFERS). Grant them per-admin via
+        # `user_permissions` so every elevation lands in `audit_log`
+        # (BR-TR-11 / BR-WL-07).
     },
     Role.OPERATOR.value: {
         Permission.CREATE_WALLET.value,
