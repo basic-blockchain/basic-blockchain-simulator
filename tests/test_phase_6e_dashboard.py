@@ -269,7 +269,10 @@ async def test_volume_empty_chain_returns_grid_with_zeros(monkeypatch):
             body = await r.get_json()
             assert body["range"] == "30d"
             assert body["bucket"] == "day"
-            assert body["currency"] == "USD"
+            # Quote currency is `DASHBOARD_QUOTE_CURRENCY` (default USDT
+             # since Phase 6i.1) — the response field name stays
+             # `balance_usd` because stablecoins peg 1:1.
+            assert body["currency"] == "USDT"
             # 30 day-buckets at zero (no tx) covers the window.
             assert len(body["series"]) >= 30
             assert all(row["tx_count"] == 0 for row in body["series"])
@@ -389,7 +392,7 @@ def test_convert_to_usd_uses_rate_at_timestamp():
     from api.admin_routes import _convert_to_usd
 
     store = InMemoryCurrencyStore()
-    store.create_currency(code="USD", name="US Dollar", decimals=2)
+    store.create_currency(code="USDT", name="Tether USD", decimals=2)
     store.create_currency(code="BTC", name="Bitcoin", decimals=8)
 
     long_ago = datetime.now(timezone.utc) - timedelta(days=365)
@@ -397,11 +400,11 @@ def test_convert_to_usd_uses_rate_at_timestamp():
     # confirm the lookup picks the latest <= at and returns None when
     # `at` predates every row.
     store.set_exchange_rate(
-        from_currency="BTC", to_currency="USD",
+        from_currency="BTC", to_currency="USDT",
         rate=Decimal("10"), fee_rate=Decimal("0"), source="seed",
     )
     store.set_exchange_rate(
-        from_currency="BTC", to_currency="USD",
+        from_currency="BTC", to_currency="USDT",
         rate=Decimal("20"), fee_rate=Decimal("0"), source="seed",
     )
 
@@ -425,7 +428,7 @@ def test_convert_to_usd_passes_through_when_source_is_usd():
     store = InMemoryCurrencyStore()
     now = datetime.now(timezone.utc)
     assert _convert_to_usd(
-        currencies=store, from_currency="USD", amount=Decimal("42.5"), at=now,
+        currencies=store, from_currency="USDT", amount=Decimal("42.5"), at=now,
     ) == Decimal("42.5")
 
 
@@ -463,6 +466,68 @@ async def test_admin_wallets_carries_balance_usd_when_rate_exists(monkeypatch):
 
         monkeypatch.delenv("BOOTSTRAP_ADMIN_USERNAME", raising=False)
         importlib.reload(config)
+
+
+# ── Bootstrap seed (Phase 6i.1) ────────────────────────────────────────
+
+
+def test_bootstrap_seed_creates_currencies_and_rates_on_empty_store():
+    from decimal import Decimal
+    from domain.currency_repository import InMemoryCurrencyStore
+    from infrastructure.dashboard_seed import bootstrap_dashboard_seed
+
+    store = InMemoryCurrencyStore()
+    bootstrap_dashboard_seed(currencies=store, quote_currency="USDT")
+
+    codes = {c.code for c in store.list_currencies()}
+    assert {"USDT", "USDC", "BTC", "ETH", "SOL", "NATIVE"} <= codes
+    # Quote/quote is intentionally not seeded — only meaningful pairs.
+    btc_rates = store.list_exchange_rates(from_currency="BTC", to_currency="USDT")
+    assert len(btc_rates) == 1
+    assert btc_rates[0].rate == Decimal("60000")
+    assert btc_rates[0].source == "BOOTSTRAP_SEED"
+    # USDC/USDT pegs at 1:1 in the default seed.
+    usdc_rates = store.list_exchange_rates(from_currency="USDC", to_currency="USDT")
+    assert usdc_rates[0].rate == Decimal("1.00")
+
+
+def test_bootstrap_seed_is_idempotent_on_existing_data():
+    from decimal import Decimal
+    from domain.currency_repository import InMemoryCurrencyStore
+    from infrastructure.dashboard_seed import bootstrap_dashboard_seed
+
+    store = InMemoryCurrencyStore()
+    # First seed.
+    bootstrap_dashboard_seed(currencies=store, quote_currency="USDT")
+    first_rates = store.list_exchange_rates(
+        from_currency="BTC", to_currency="USDT",
+    )
+    # Second seed — must not duplicate rows or raise.
+    bootstrap_dashboard_seed(currencies=store, quote_currency="USDT")
+    second_rates = store.list_exchange_rates(
+        from_currency="BTC", to_currency="USDT",
+    )
+    assert len(second_rates) == len(first_rates) == 1
+
+
+def test_bootstrap_seed_respects_existing_rate():
+    """An operator-set rate must not be overwritten by a later seed."""
+    from decimal import Decimal
+    from domain.currency_repository import InMemoryCurrencyStore
+    from infrastructure.dashboard_seed import bootstrap_dashboard_seed
+
+    store = InMemoryCurrencyStore()
+    store.create_currency(code="BTC", name="Bitcoin", decimals=8)
+    store.create_currency(code="USDT", name="Tether", decimals=2)
+    store.set_exchange_rate(
+        from_currency="BTC", to_currency="USDT",
+        rate=Decimal("99999"), fee_rate=Decimal("0"), source="MANUAL",
+    )
+    bootstrap_dashboard_seed(currencies=store, quote_currency="USDT")
+    # Seed must not touch the operator's rate.
+    rates = store.list_exchange_rates(from_currency="BTC", to_currency="USDT")
+    assert any(r.source == "MANUAL" and r.rate == Decimal("99999") for r in rates)
+    assert all(r.source != "BOOTSTRAP_SEED" for r in rates)
 
 
 async def test_audit_since_filter_accepts_24h_window(monkeypatch):
