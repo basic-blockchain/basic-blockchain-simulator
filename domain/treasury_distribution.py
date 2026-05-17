@@ -78,18 +78,24 @@ class TreasuryDistributionRepositoryProtocol(Protocol):
         limit: int = 50,
     ) -> list[TreasuryDistributionRecord]: ...
 
-    def mark_approved_executed(
+    def record_approval_and_execution(
         self,
         op_id: str,
         *,
         approver_id: str,
         executed_tx_ids: list[str],
     ) -> TreasuryDistributionRecord | None:
-        """Transition `pending_approval` → `executed` atomically and
-        return the updated record. Returns `None` when the row is no
-        longer in `pending_approval` (already executed, cancelled, or
-        missing). Raises `TreasuryDistributionSameSignerError` when
-        `approver_id == initiated_by` (BR-TR-01)."""
+        """Record the facts of approval and execution atomically:
+        transitions `pending_approval` → `executed` and persists the
+        approver, both timestamps and the resulting tx ids in one
+        update. The caller is responsible for having submitted the
+        N transfers to the mempool BEFORE invoking this method — the
+        repo only records what already happened on the chain side.
+
+        Returns `None` when the row is no longer in `pending_approval`
+        (already executed, cancelled, or missing). Raises
+        `TreasuryDistributionSameSignerError` when `approver_id ==
+        initiated_by` (BR-TR-01)."""
         ...
 
     def mark_cancelled(
@@ -146,7 +152,7 @@ class InMemoryTreasuryDistributionStore:
         rows.sort(key=lambda r: r.initiated_at, reverse=True)
         return rows[: max(0, limit)]
 
-    def mark_approved_executed(
+    def record_approval_and_execution(
         self,
         op_id: str,
         *,
