@@ -153,9 +153,12 @@ class BlockchainService:
         # wallet's recorded public key. Coinbase / mint transactions
         # carry the sentinel `signature == "MINT"` and skip the ECDSA
         # check (the system mints its own coin and there is no private
-        # key to sign with).
+        # key to sign with). Phase 7.8 treasury distributions carry
+        # `signature == "TREASURY"` and also skip the ECDSA check —
+        # authorisation is enforced upstream by the dual-sign envelope
+        # (BR-WL-08).
         from domain.crypto import canonical_transfer_message, verify
-        from domain.wallet import COINBASE_SIGNATURE
+        from domain.wallet import COINBASE_SIGNATURE, TREASURY_SIGNATURE
 
         # The validator works against an optional wallet repository
         # injected at construction time; without it (in-memory tests
@@ -171,7 +174,7 @@ class BlockchainService:
                 return False
             if wallet_repo is not None:
                 for tx in block.transactions:
-                    if tx.signature == COINBASE_SIGNATURE:
+                    if tx.signature in (COINBASE_SIGNATURE, TREASURY_SIGNATURE):
                         continue
                     if not tx.sender_wallet_id or not tx.signature:
                         # Non-coinbase tx without wallet ID / signature

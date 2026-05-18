@@ -56,6 +56,17 @@ from domain.wallet_repository import (
 # sees this string and applies the credit unconditionally.
 COINBASE_SIGNATURE = "MINT"
 
+# Sentinel for treasury → user transfers built by the Phase 7.8 dual-sign
+# envelope (BR-WL-08, BR-TR-04). Treasury wallets carry a public key but
+# the simulator never persists their private key (`generate_wallet_material`
+# discards the seed), so cryptographic signing of treasury transfers is
+# impossible. Authorisation comes from the dual-sign envelope: an
+# operation reaches the mempool only after `INITIATE_TREASURY_DISTRIBUTION`
+# + `APPROVE_TREASURY_DISTRIBUTION` from two distinct admins, the latter
+# audited per BR-TR-09. The chain validator skips signature verification
+# when it sees this sentinel, exactly like COINBASE_SIGNATURE.
+TREASURY_SIGNATURE = "TREASURY"
+
 
 class CreatedWallet(NamedTuple):
     wallet_id: str
@@ -272,8 +283,16 @@ def apply_block_deltas(
     wallets: WalletRepositoryProtocol, transactions: list[Transaction]
 ) -> None:
     """Apply balance deltas for every transaction in a freshly mined
-    block. Coinbase / mint txns credit the receiver; regular transfers
-    debit sender + credit receiver atomically.
+    block.
+
+    Three transaction shapes:
+      * `COINBASE_SIGNATURE` — credit receiver only (mint).
+      * `TREASURY_SIGNATURE` — debit treasury sender + credit recipient
+        (Phase 7.8 dual-sign distributions). Falls through to the regular
+        transfer branch below; the signature only matters to the chain
+        validator, not to `apply_block_deltas`.
+      * Regular signed transfers — debit sender + credit receiver
+        atomically.
 
     Back-compat: legacy v0.10.0 transactions submitted through
     `POST /api/v1/transactions` carry empty `sender_wallet_id` /
